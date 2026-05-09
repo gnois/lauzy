@@ -40,10 +40,10 @@ return {
 		, Nil = 'Nil'
 		, Val = 'Val'
 		, Tuple = 'Tuple'
-		, Func = 'Func' -- FuncType in MLstruct
-		, Tbl = 'Tbl' -- RecordType in MLstruct
-		, Or = 'Or' -- Union in MLstruct
-		, And = 'And' -- Intersect in MLstruct
+		, Func = 'Func'
+		, Tbl = 'Tbl'
+		, Or = 'Or' -- Union
+		, And = 'And' -- Intersect
 		, Top = 'Top'
 		, Bot = 'Bot'
 	}

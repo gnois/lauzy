@@ -31,6 +31,13 @@ local norm_pos = function(line, col)
     end
     return math.floor(line), math.floor(col)
 end
+local caret_pad = function(src, col)
+    if not src or col <= 1 then
+        return ""
+    end
+    local upto = string.sub(src, 1, col - 1)
+    return string.gsub(upto, "[^\t]", " ")
+end
 local report = function(color, get_source)
     local Severe_Color = {color.yellow, color.magenta, color.red}
     local warnings = {}
@@ -81,7 +88,7 @@ local report = function(color, get_source)
                 if col > maxcol then
                     col = maxcol
                 end
-                local pad = string.rep(" ", col > 1 and col - 1 or 0)
+                local pad = caret_pad(src, col)
                 warns[i] = src .. "\n" .. pad .. clr .. "^^" .. color.reset .. " (" .. m.line .. ", " .. m.col .. "): " .. clr .. msg .. color.reset
             else
                 warns[i] = string.format(" %d,%d:" .. clr .. "  %s" .. color.reset, m.line, m.col, msg)

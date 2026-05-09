@@ -36,36 +36,103 @@ return function(scope, stmts, warn, import, typecheck)
             error(msg)
         end
     end
-    local check = function(x, y, node, msg)
-        if typecheck then
-            local ok, err = solv.constrain(y, x)
-            if not ok then
-                warn(node.line, node.col, 1, msg .. err)
-            end
-            return ok and y or false
-        end
-        return x
-    end
     local describe_type = function(t)
         return ty.tostr(solv.apply(t))
     end
-    local check_sub = function(lhs, rhs, node, msg)
+    local maybe_self = function(name)
+        if name == "@" then
+            return "self"
+        end
+        return name
+    end
+    local declare = function(var, vtype)
+        assert(var.tag == TExpr.Id)
+        local name = maybe_self(var.name)
+        scope.new_var(name, vtype, var.line, var.col)
+    end
+    local declared_type = function(var)
+        assert(var.tag == TExpr.Id)
+        local name = maybe_self(var.name)
+        local __, t = scope.declared(name)
+        return t
+    end
+    local is_string_index = function(idx, it)
+        return idx and idx.tag == TExpr.String and it and it.tag == TType.Val and it.type == "str"
+    end
+    local callable_name = function(func)
+        if not func then
+            return nil
+        end
+        if func.tag == TExpr.Id then
+            return maybe_self(func.name)
+        end
+        if func.tag == TExpr.Field then
+            return func.field
+        end
+        if func.tag == TExpr.Index and func.idx and func.idx.tag == TExpr.String then
+            return func.idx.value
+        end
+        return nil
+    end
+    local check = function(expected, actual, node, msg)
         if typecheck then
-            local ok, err = solv.constrain(lhs, rhs)
+            local ok, err = solv.constrain(actual, expected)
             if not ok then
-                local snapshot = " [" .. describe_type(lhs) .. " <: " .. describe_type(rhs) .. "]"
+                local snapshot = " [" .. describe_type(actual) .. " <: " .. describe_type(expected) .. "]"
                 warn(node.line, node.col, 1, msg .. err .. snapshot)
             end
-            return ok and lhs or false
+            return ok and actual or false
         end
-        return lhs
+        return expected
     end
-    local check_op = function(x, y, node, op)
-        return check(x, y, node, "operator `" .. op .. "` ")
+    local op_msg = function(op, expr, side)
+        local name = callable_name(expr)
+        if name then
+            if side then
+                return side .. " operand `" .. name .. "` "
+            end
+            return "operand `" .. name .. "` "
+        end
+        return "operator `" .. op .. "` "
+    end
+    local check_op = function(expected, actual, node, op, expr, side)
+        return check(expected, actual, node, op_msg(op, expr, side))
+    end
+    local assign_msg = function(node)
+        if node.tag == TExpr.Field then
+            local field = "`" .. node.field .. "` "
+            local recv = callable_name(node.obj)
+            if recv then
+                return "receiver `" .. recv .. "` for " .. field
+            end
+            return field
+        end
+        if node.tag == TExpr.Index then
+            local recv = callable_name(node.obj)
+            if node.idx and node.idx.tag == TExpr.String then
+                local field = "`" .. node.idx.value .. "` "
+                if recv then
+                    return "receiver `" .. recv .. "` for " .. field
+                end
+                return field
+            end
+            if recv then
+                return "receiver `" .. recv .. "` indexed "
+            end
+            return "indexed "
+        end
     end
     local check_field = function(otype, field, node)
         local t = solv.apply(otype)
-        if check(ty.tbl({}), t, node, "field `" .. field .. "` ") then
+        local receiver = nil
+        if node and node.obj then
+            receiver = callable_name(node.obj)
+        end
+        local msg = "`" .. field .. "` "
+        if receiver then
+            msg = "receiver `" .. receiver .. "` for " .. msg
+        end
+        if check(ty.tbl({}), t, node, msg) then
             local tbl = ty.get_tbl(t)
             if tbl then
                 for _, tk in ipairs(tbl) do
@@ -80,21 +147,21 @@ return function(scope, stmts, warn, import, typecheck)
         end
         return ty.any(), t
     end
+    local expected_fn_type = function(atypes)
+        return ty.func(ty.tuple(atypes), ty.tuple_any())
+    end
     local check_fn = function(ftype, atypes, node, fname)
         if typecheck then
             local fn = solv.apply(ftype)
+            local expected = expected_fn_type(atypes)
             if fn.tag == TType.New then
-                solv.extend(fn, ty.func(ty.tuple(atypes), ty.tuple_any()))
-            elseif fn.tag == TType.Nil or fn.tag == TType.Val then
-                if fname then
-                    fname = "`" .. fname .. "` which is "
-                end
-                warn(node.line, node.col, 1, "trying to call " .. (fname or "") .. ty.tostr(fn))
+                solv.extend(fn, expected)
             else
+                local fname_msg = ""
                 if fname then
-                    fname = "`" .. fname .. "` "
+                    fname_msg = "`" .. fname .. "` "
                 end
-                check_sub(fn, ty.func(ty.tuple(atypes), ty.tuple_any()), node, "function " .. (fname or ""))
+                check(expected, fn, node, fname_msg)
                 if fn.outs then
                     return fn.outs
                 end
@@ -143,23 +210,6 @@ return function(scope, stmts, warn, import, typecheck)
             end
         end
         return types
-    end
-    local maybe_self = function(name)
-        if name == "@" then
-            return "self"
-        end
-        return name
-    end
-    local declare = function(var, vtype)
-        assert(var.tag == TExpr.Id)
-        local name = maybe_self(var.name)
-        scope.new_var(name, vtype, var.line, var.col)
-    end
-    local declared_type = function(var)
-        assert(var.tag == TExpr.Id)
-        local name = maybe_self(var.name)
-        local __, t = scope.declared(name)
-        return t
     end
     local balance_check = function(lefts, rights)
         local r = #rights
@@ -264,7 +314,7 @@ return function(scope, stmts, warn, import, typecheck)
     Expr[TExpr.Index] = function(node)
         local ot = infer_expr(node.obj)
         local it = infer_expr(node.idx)
-        if node.idx.tag == TExpr.String and it.tag == TType.Val and it.type == "str" then
+        if is_string_index(node.idx, it) then
             return check_field(ot, node.idx.value, node)
         end
         check(ty.tbl({}), ot, node, "indexer ")
@@ -291,17 +341,17 @@ return function(scope, stmts, warn, import, typecheck)
         if not atypes then
             atypes = infer_exprs(node.args)
         end
-        return check_fn(ftype, atypes, node, func.name)
+        return check_fn(ftype, atypes, node, callable_name(func))
     end
     Expr[TExpr.Unary] = function(node)
         local rtype = infer_expr(node.right)
         local op = node.op
         if op == "#" then
-            check_op(ty["or"](ty.tbl({}), ty.str()), rtype, node, op)
+            check_op(ty["or"](ty.tbl({}), ty.str()), rtype, node, op, node.right)
             return ty.num()
         end
         if op == "-" then
-            check_op(ty.num(), rtype, node, op)
+            check_op(ty.num(), rtype, node, op, node.right)
             return ty.num()
         end
         return ty.bool()
@@ -316,11 +366,11 @@ return function(scope, stmts, warn, import, typecheck)
         if arithmetic(op) or relational(op) then
             if op ~= "==" and op ~= "~=" then
                 if arithmetic(op) then
-                    check_op(ty.num(), ltype, node, op)
-                    check_op(ty.num(), rtype, node, op)
+                    check_op(ty.num(), ltype, node, op, node.left, "left")
+                    check_op(ty.num(), rtype, node, op, node.right, "right")
                 else
-                    check_op(ltype, rtype, node, op)
-                    check_op(rtype, ltype, node, op)
+                    check_op(ltype, rtype, node, op, node.right, "right")
+                    check_op(rtype, ltype, node, op, node.left, "left")
                 end
             end
             if relational(op) then
@@ -328,8 +378,8 @@ return function(scope, stmts, warn, import, typecheck)
             end
         elseif op == ".." then
             local strnum = ty["or"](ty.num(), ty.str())
-            check_op(strnum, rtype, node, op)
-            check_op(strnum, ltype, node, op)
+            check_op(strnum, rtype, node, op, node.right, "right")
+            check_op(strnum, ltype, node, op, node.left, "left")
             return ty.str()
         end
         return ltype
@@ -391,10 +441,10 @@ return function(scope, stmts, warn, import, typecheck)
                 end
             else
                 local ot = infer_expr(n.obj)
-                if check(ty.tbl({}), ot, n, "assignment ") then
+                if check(ty.tbl({}), ot, n, assign_msg(n)) then
                     if n.tag == TExpr.Index then
                         local it = infer_expr(n.idx)
-                        if n.idx.tag == TExpr.String and it.tag == TType.Val and it.type == "str" then
+                        if is_string_index(n.idx, it) then
                             assign_field(n, ot, n.idx.value, rtype)
                         end
                     else

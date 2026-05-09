@@ -48,13 +48,6 @@ return function()
         end
         return dst
     end
-    local map_list = function(node, mapper)
-        local out = {}
-        for i, v in ipairs(node) do
-            out[i] = mapper(v)
-        end
-        return out
-    end
     local apply
     local coalesce
     local describe
@@ -92,21 +85,24 @@ return function()
             return maybe_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen), outs = coalesce(node.outs, pol, seen)})
         end
         if node.tag == TType.Tuple then
-            local out = map_list(node, function(v)
-                coalesce(v, pol, seen)
-            end)
-            return maybe_varargs(node, {tag = TType.Tuple, unpack(out)})
+            local out = {}
+            for i, v in ipairs(node) do
+                out[i] = coalesce(v, pol, seen)
+            end
+            return maybe_varargs(node, ty.tuple(out))
         end
         if node.tag == TType.Or then
-            local out = map_list(node, function(v)
-                coalesce(v, pol, seen)
-            end)
+            local out = {}
+            for i, v in ipairs(node) do
+                out[i] = coalesce(v, pol, seen)
+            end
             return maybe_varargs(node, ty["or"](unpack(out)))
         end
         if node.tag == TType.And then
-            local out = map_list(node, function(v)
-                coalesce(v, pol, seen)
-            end)
+            local out = {}
+            for i, v in ipairs(node) do
+                out[i] = coalesce(v, pol, seen)
+            end
             return maybe_varargs(node, ty["and"](unpack(out)))
         end
         if node.tag == TType.Tbl then
@@ -118,7 +114,7 @@ return function()
                 end
                 out[i] = {coalesce(tk[1], pol, seen), key}
             end
-            return maybe_varargs(node, {tag = TType.Tbl, unpack(out)})
+            return maybe_varargs(node, ty.tbl(out))
         end
         return node
     end
@@ -128,93 +124,66 @@ return function()
         end
         return ty.tostr(coalesce(node, true, {}))
     end
-    local Subst = {}
-    local subst = function(node, tvar, texp)
+    local subst
+    subst = function(node, tvar, texp)
         assert(tvar.tag == TType.New)
-        local rule = Subst[node.tag]
-        if rule then
-            return rule(node, tvar, texp)
+        if not node or "table" ~= type(node) then
+            return node
+        end
+        if node.tag == TType.New then
+            if node.id == tvar.id then
+                return texp
+            end
+            return node
+        end
+        if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
+            for i = 1, #node do
+                node[i] = subst(node[i], tvar, texp)
+            end
+            return node
+        end
+        if node.tag == TType.Func then
+            node.ins = subst(node.ins, tvar, texp)
+            node.outs = subst(node.outs, tvar, texp)
+            return node
+        end
+        if node.tag == TType.Tbl then
+            for i = 1, #node do
+                node[i] = {subst(node[i][1], tvar, texp), node[i][2] and subst(node[i][2], tvar, texp)}
+            end
+            return node
         end
         return node
     end
-    Subst[TType.New] = function(node, tvar, texp)
-        if node.id == tvar.id then
-            return texp
-        end
-        return node
-    end
-    Subst[TType.Tuple] = function(node, tvar, texp)
-        for i = 1, #node do
-            node[i] = subst(node[i], tvar, texp)
-        end
-        return node
-    end
-    Subst[TType.Func] = function(node, tvar, texp)
-        node.ins = subst(node.ins, tvar, texp)
-        node.outs = subst(node.outs, tvar, texp)
-        return node
-    end
-    Subst[TType.Tbl] = function(node, tvar, texp)
-        for i = 1, #node do
-            node[i] = {subst(node[i][1], tvar, texp), node[i][2] and subst(node[i][2], tvar, texp)}
-        end
-        return node
-    end
-    Subst[TType.Or] = function(node, tvar, texp)
-        for i = 1, #node do
-            node[i] = subst(node[i], tvar, texp)
-        end
-        return node
-    end
-    Subst[TType.And] = function(node, tvar, texp)
-        for i = 1, #node do
-            node[i] = subst(node[i], tvar, texp)
-        end
-        return node
-    end
-    local Apply = {}
     apply = function(node)
-        local rule = Apply[node.tag]
-        if rule then
-            return rule(node)
+        if not node or "table" ~= type(node) then
+            return node
+        end
+        if node.tag == TType.New then
+            ensure_var(node)
+            return subs[node.id] or node
+        end
+        if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
+            for i = 1, #node do
+                node[i] = apply(node[i])
+            end
+            return node
+        end
+        if node.tag == TType.Func then
+            node.ins = apply(node.ins)
+            node.outs = apply(node.outs)
+            return node
+        end
+        if node.tag == TType.Tbl then
+            for i = 1, #node do
+                node[i] = {apply(node[i][1]), node[i][2] and apply(node[i][2])}
+            end
+            return node
         end
         return node
     end
-    Apply[TType.New] = function(node)
-        ensure_var(node)
-        return subs[node.id] or node
-    end
-    Apply[TType.Tuple] = function(node)
-        for i = 1, #node do
-            node[i] = apply(node[i])
-        end
-        return node
-    end
-    Apply[TType.Func] = function(node)
-        node.ins = apply(node.ins)
-        node.outs = apply(node.outs)
-        return node
-    end
-    Apply[TType.Tbl] = function(node)
-        for i = 1, #node do
-            node[i] = {apply(node[i][1]), node[i][2] and apply(node[i][2])}
-        end
-        return node
-    end
-    Apply[TType.Or] = function(node)
-        for i = 1, #node do
-            node[i] = apply(node[i])
-        end
-        return node
-    end
-    Apply[TType.And] = function(node)
-        for i = 1, #node do
-            node[i] = apply(node[i])
-        end
-        return node
-    end
-    local Occur = {}
-    local occurs = function(x, y, seen)
+    local occurs
+    occurs = function(x, y, seen)
         y = apply(y)
         if not y then
             return false
@@ -226,47 +195,27 @@ return function()
             end
             seen[y] = true
         end
-        local rule = Occur[y.tag]
-        if rule then
-            return rule(x, y, seen)
+        if y.tag == TType.New then
+            return x.id == y.id
         end
-        return false
-    end
-    Occur[TType.New] = function(x, node)
-        return x.id == node.id
-    end
-    Occur[TType.Tuple] = function(x, node, seen)
-        for _, p in ipairs(node) do
-            if occurs(x, p, seen) then
-                return true
+        if y.tag == TType.Tuple or y.tag == TType.Or or y.tag == TType.And then
+            for _, t in ipairs(y) do
+                if occurs(x, t, seen) then
+                    return true
+                end
             end
+            return false
         end
-        return false
-    end
-    Occur[TType.Func] = function(x, node, seen)
-        return occurs(x, node.ins, seen) or occurs(x, node.outs, seen)
-    end
-    Occur[TType.Tbl] = function(x, node, seen)
-        for _, tk in ipairs(node) do
-            if occurs(x, tk[1], seen) or tk[2] and occurs(x, tk[2], seen) then
-                return true
-            end
+        if y.tag == TType.Func then
+            return occurs(x, y.ins, seen) or occurs(x, y.outs, seen)
         end
-        return false
-    end
-    Occur[TType.Or] = function(x, node, seen)
-        for _, t in ipairs(node) do
-            if occurs(x, t, seen) then
-                return true
+        if y.tag == TType.Tbl then
+            for _, tk in ipairs(y) do
+                if occurs(x, tk[1], seen) or tk[2] and occurs(x, tk[2], seen) then
+                    return true
+                end
             end
-        end
-        return false
-    end
-    Occur[TType.And] = function(x, node, seen)
-        for _, t in ipairs(node) do
-            if occurs(x, t, seen) then
-                return true
-            end
+            return false
         end
         return false
     end
@@ -444,9 +393,10 @@ return function()
             return maybe_varargs(node, {tag = TType.Func, ins = extrude(node.ins, not pol, lim, cache), outs = extrude(node.outs, pol, lim, cache)})
         end
         if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
-            local out = map_list(node, function(v)
-                extrude(v, pol, lim, cache)
-            end)
+            local out = {}
+            for i, v in ipairs(node) do
+                out[i] = extrude(v, pol, lim, cache)
+            end
             return maybe_varargs(node, {tag = node.tag, unpack(out)})
         end
         if node.tag == TType.Tbl then
@@ -458,7 +408,7 @@ return function()
                 end
                 out[i] = {extrude(tk[1], pol, lim, cache), key}
             end
-            return maybe_varargs(node, {tag = TType.Tbl, unpack(out)})
+            return maybe_varargs(node, ty.tbl(out))
         end
         return node
     end
@@ -489,7 +439,10 @@ return function()
                 return maybe_varargs(node, fv)
             end
             if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
-                local out = map_list(node, rec)
+                local out = {}
+                for i, v in ipairs(node) do
+                    out[i] = rec(v)
+                end
                 return maybe_varargs(node, {tag = node.tag, unpack(out)})
             end
             if node.tag == TType.Func then
@@ -500,7 +453,7 @@ return function()
                 for i, tk in ipairs(node) do
                     out[i] = {rec(tk[1]), tk[2] and rec(tk[2]) or tk[2]}
                 end
-                return maybe_varargs(node, {tag = TType.Tbl, unpack(out)})
+                return maybe_varargs(node, ty.tbl(out))
             end
             return node
         end
@@ -532,7 +485,7 @@ return function()
             if rhs.tag == TType.Any then
                 return true
             end
-            return false, "<any> is too wide"
+            return false, "may be <any> instead of " .. describe(rhs)
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)
@@ -566,7 +519,7 @@ return function()
                     return true
                 end
             end
-            return false, "cannot fit into union"
+            return false, "cannot match any part of union"
         end
         if lhs.tag == TType.And then
             local last_err = "cannot constrain intersection"
@@ -636,7 +589,7 @@ return function()
                 return true
             end
         end
-        return false, "cannot constrain " .. describe(lhs) .. " <: " .. describe(rhs)
+        return false, "may be " .. describe(lhs) .. " instead of " .. describe(rhs)
     end
     return {
         apply = apply

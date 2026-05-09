@@ -36,34 +36,88 @@ return \scope, stmts, warn, import, typecheck ->
 		else
 			error(msg)
 
-	var check = \x, y, node, msg ->
-		if typecheck
-			var ok, err = solv.constrain(y, x)
-			if not ok
-				warn(node.line, node.col, 1, msg .. err)
-			return ok and y or false
-		return x
-
 	var describe_type = \t ->
 		return ty.tostr(solv.apply(t))
 
-	var check_sub = \lhs, rhs, node, msg ->
-		if typecheck
-			var ok, err = solv.constrain(lhs, rhs)
-			if not ok
-				var snapshot = " [" .. describe_type(lhs) .. " <: " .. describe_type(rhs) .. "]"
-				warn(node.line, node.col, 1, msg .. err .. snapshot)
-			return ok and lhs or false
-		return lhs
+	var maybe_self = \name ->
+		if name == '@'
+			return 'self'
+		return name
 
-	var check_op = \x, y, node, op ->
+	var declare = \var, vtype ->
+		assert(var.tag == TExpr.Id)
+		var name = maybe_self(var.name)
+		scope.new_var(name, vtype, var.line, var.col)
+
+	var declared_type = \var ->
+		assert(var.tag == TExpr.Id)
+		var name = maybe_self(var.name)
+		var __, t = scope.declared(name)
+		return t
+
+	var is_string_index = \idx, it ->
+		return idx and idx.tag == TExpr.String and it and it.tag == TType.Val and it.type == "str"
+
+	var callable_name = \func ->
+		if not func
+			return nil
+		if func.tag == TExpr.Id
+			return maybe_self(func.name)
+		if func.tag == TExpr.Field
+			return func.field
+		if func.tag == TExpr.Index and func.idx and func.idx.tag == TExpr.String
+			return func.idx.value
+		return nil
+
+	var check = \expected, actual, node, msg ->
+		if typecheck
+			var ok, err = solv.constrain(actual, expected)
+			if not ok
+				var snapshot = " [" .. describe_type(actual) .. " <: " .. describe_type(expected) .. "]"
+				warn(node.line, node.col, 1, msg .. err .. snapshot)
+			return ok and actual or false
+		return expected
+
+	var op_msg = \op, expr, side ->
+		var name = callable_name(expr)
+		if name
+			if side
+				return side .. " operand `" .. name .. "` "
+			return "operand `" .. name .. "` "
+		return "operator `" .. op .. "` "
+
+	var check_op = \expected, actual, node, op, expr, side ->
 		-- operators like arithmetics can be overloaded via metatable, and we dont handle that yet, so as long as types are equal, let it pass for now
-		-- check x against y for now, bcoz probably most literal appears right
-		return check(x, y, node, "operator `" .. op .. "` ")
+		-- check expected against actual for now, bcoz probably most literal appears right
+		return check(expected, actual, node, op_msg(op, expr, side))
+
+	var assign_msg = \node ->
+		if node.tag == TExpr.Field
+			var field = "`" .. node.field .. "` "
+			var recv = callable_name(node.obj)
+			if recv
+				return "receiver `" .. recv .. "` for " .. field
+			return field
+		if node.tag == TExpr.Index
+			var recv = callable_name(node.obj)
+			if node.idx and node.idx.tag == TExpr.String
+				var field = "`" .. node.idx.value .. "` "
+				if recv
+					return "receiver `" .. recv .. "` for " .. field
+				return field
+			if recv
+				return "receiver `" .. recv .. "` indexed "
+			return "indexed "
 
 	var check_field = \otype, field, node ->
 		var t = solv.apply(otype)
-		if check(ty.tbl({}), t, node, "field `" .. field .. "` ")
+		var receiver = nil
+		if node and node.obj
+			receiver = callable_name(node.obj)
+		var msg = "`" .. field .. "` "
+		if receiver
+			msg = "receiver `" .. receiver .. "` for " .. msg
+		if check(ty.tbl({}), t, node, msg)
 			var tbl = ty.get_tbl(t)
 			if tbl
 				for _, tk in ipairs(tbl)
@@ -75,20 +129,27 @@ return \scope, stmts, warn, import, typecheck ->
 				return vt, t
 		return ty.any(), t
 
+	var expected_fn_type = \atypes ->
+		return ty.func(ty.tuple(atypes), ty.tuple_any())
+
 	var check_fn = \ftype, atypes, node, fname ->
 		if typecheck
 			var fn = solv.apply(ftype)
+			var expected = expected_fn_type(atypes)
 			if fn.tag == TType.New
-				solv.extend(fn, ty.func(ty.tuple(atypes), ty.tuple_any()))
+				solv.extend(fn, expected)
+			--``
 			else if fn.tag == TType.Nil or fn.tag == TType.Val
+				var fname_msg = ""
 				if fname
-					fname = "`" .. fname .. "` which is "
-				warn(node.line, node.col, 1, "trying to call " .. (fname or "") .. ty.tostr(fn))
+					fname_msg = "`" .. fname .. "` which is "
+				warn(node.line, node.col, 1, "trying to call " .. fname_msg .. ty.tostr(fn))
+			``
 			else
-				-- check params to args
+				var fname_msg = ""
 				if fname
-					fname = "`" .. fname .. "` "
-				check_sub(fn, ty.func(ty.tuple(atypes), ty.tuple_any()), node, "function " .. (fname or ""))
+					fname_msg = "`" .. fname .. "` "
+				check(expected, fn, node, fname_msg)
 				if fn.outs
 					return fn.outs
 		return ty.tuple_any()
@@ -129,22 +190,6 @@ return \scope, stmts, warn, import, typecheck ->
 				t = t + 1
 				types[t] = nt
 		return types
-
-	var maybe_self = \name ->
-		if name == '@'
-			return 'self'
-		return name
-
-	var declare = \var, vtype ->
-		assert(var.tag == TExpr.Id)
-		var name = maybe_self(var.name)
-		scope.new_var(name, vtype, var.line, var.col)
-
-	var declared_type = \var ->
-		assert(var.tag == TExpr.Id)
-		var name = maybe_self(var.name)
-		var __, t = scope.declared(name)
-		return t
 
 	var balance_check = \lefts, rights ->
 		var r = #rights
@@ -241,7 +286,7 @@ return \scope, stmts, warn, import, typecheck ->
 	Expr[TExpr.Index] = \node ->
 		var ot = infer_expr(node.obj)
 		var it = infer_expr(node.idx)
-		if node.idx.tag == TExpr.String and it.tag == TType.Val and it.type == "str"
+		if is_string_index(node.idx, it)
 			return check_field(ot, node.idx.value, node)
 
 		-- else key index can be any type
@@ -270,16 +315,16 @@ return \scope, stmts, warn, import, typecheck ->
 
 		if not atypes
 			atypes = infer_exprs(node.args)
-		return check_fn(ftype, atypes, node, func.name)
+		return check_fn(ftype, atypes, node, callable_name(func))
 
 	Expr[TExpr.Unary] = \node ->
 		var rtype = infer_expr(node.right)
 		var op = node.op
 		if op == '#'
-			check_op(ty.or(ty.tbl({}), ty.str()), rtype, node, op)
+			check_op(ty.or(ty.tbl({}), ty.str()), rtype, node, op, node.right)
 			return ty.num()
 		if op == '-'
-			check_op(ty.num(), rtype, node, op)
+			check_op(ty.num(), rtype, node, op, node.right)
 			return ty.num()
 		-- op == 'not'
 		return ty.bool()
@@ -297,18 +342,18 @@ return \scope, stmts, warn, import, typecheck ->
 			if op ~= '==' and op ~= '~='
 				-- symmetric check
 				if arithmetic(op)
-					check_op(ty.num(), ltype, node, op)
-					check_op(ty.num(), rtype, node, op)
+					check_op(ty.num(), ltype, node, op, node.left, "left")
+					check_op(ty.num(), rtype, node, op, node.right, "right")
 				else
-					check_op(ltype, rtype, node, op)
-					check_op(rtype, ltype, node, op)
+					check_op(ltype, rtype, node, op, node.right, "right")
+					check_op(rtype, ltype, node, op, node.left, "left")
 			if relational(op)
 				return ty.bool()
 		else if op == '..'
 			var strnum = ty.or(ty.num(), ty.str())
 			-- symmetric check
-			check_op(strnum, rtype, node, op)
-			check_op(strnum, ltype, node, op)
+			check_op(strnum, rtype, node, op, node.right, "right")
+			check_op(strnum, ltype, node, op, node.left, "left")
 			return ty.str()
 		-- op == 'or'
 		return ltype
@@ -372,10 +417,10 @@ return \scope, stmts, warn, import, typecheck ->
 						solv.extend(ltype, ty.or(solv.apply(ltype), rtype))
 			else
 				var ot = infer_expr(n.obj)
-				if check(ty.tbl({}), ot, n, "assignment ")
+				if check(ty.tbl({}), ot, n, assign_msg(n))
 					if n.tag == TExpr.Index
 						var it = infer_expr(n.idx)
-						if n.idx.tag == TExpr.String and it.tag == TType.Val and it.type == "str"
+						if is_string_index(n.idx, it)
 							assign_field(n, ot, n.idx.value, rtype)
 					else
 						assign_field(n, ot, n.field, rtype)

@@ -26,6 +26,12 @@ var norm_pos = \line, col ->
 		col = 1
 	return math.floor(line), math.floor(col)
 
+var caret_pad = \src, col ->
+	if not src or col <= 1
+		return ""
+	var upto = string.sub(src, 1, col - 1)
+	return string.gsub(upto, "[^\t]", " ")
+
 var report = \color, get_source ->
 	-- severity color - 1,2,3
 	var Severe_Color = {color.yellow, color.magenta, color.red}
@@ -81,7 +87,7 @@ var report = \color, get_source ->
 					var maxcol = #src + 1
 					if col > maxcol
 						col = maxcol
-					var pad = string.rep(' ', col > 1 and (col - 1) or 0)
+					var pad = caret_pad(src, col)
 					warns[i] = src .. "\n" .. pad .. clr .. "^^" .. color.reset .. " (" .. m.line .. ", " .. m.col .. "): " .. clr .. msg .. color.reset
 				else
 					warns[i] = string.format(" %d,%d:" .. clr ..  "  %s" .. color.reset, m.line, m.col, msg)
