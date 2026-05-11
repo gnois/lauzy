@@ -12,7 +12,7 @@ local is = chars.is
 local build = chars.build
 local END_OF_STREAM = -1
 local TokenSymbol = {TK_name = "identifier", TK_indent = "<indent>", TK_dedent = "<dedent>", TK_newline = "<newline>", TK_eof = "<eof>"}
-local IsNewLine = {["\n"] = true, ["\r"] = true}
+local IsNewLine = {["\n"] = true}
 local IsEscape = {
     a = true
     , b = true
@@ -35,15 +35,14 @@ local token2text = function(tok)
     end
     return t
 end
-return function(read, warn)
-    local data, n, p = nil, 0, 0
+return function(stream, warn)
     local ch, comment_buff = "", ""
     local buff, bi = {}, 1
     local newline = nil
     local indent = nil
     local minus = nil
     local tabs = nil
-    local lookahead = {token = "TK_eof", value = nil}
+    local lookahead = {token = "TK_eof", value = nil, line = 1, col = 1}
     local state = {
         prevline = 1
         , prevcol = 1
@@ -76,30 +75,15 @@ return function(read, warn)
         end
         warn(state.line, col, 3, string.format(em, ...))
     end
-    local popchar = function()
-        local k = p
-        local c = string.sub(data, k, k)
-        p = k + 1
-        n = n - 1
-        return c
-    end
-    local fill = function()
-        local stream = read()
-        if not stream then
-            return END_OF_STREAM
-        end
-        data, n, p = stream, #stream, 1
-        return popchar()
-    end
     local nextchar = function()
-        local c = n > 0 and popchar() or fill()
-        state.col = state.col + 1
+        local c = stream.next()
+        if not c then
+            c = END_OF_STREAM
+        end
         ch = c
+        local pos = stream.loc()
+        state.line, state.col = pos.line, pos.col
         return c
-    end
-    local char = function(m)
-        local k = p + m
-        return string.sub(data, k, k)
     end
     local add_buffer = function(c)
         buff[bi] = c
@@ -118,15 +102,6 @@ return function(read, warn)
         local s = comment_buff
         comment_buff = ""
         return s
-    end
-    local inc_line = function()
-        local old = ch
-        nextchar()
-        if IsNewLine[ch] and ch ~= old then
-            nextchar()
-        end
-        state.line = state.line + 1
-        state.col = 1
     end
     local add_eq = function()
         local count = 0
@@ -207,11 +182,7 @@ return function(read, warn)
                 end
             else
                 add_buffer(ch)
-                if IsNewLine[ch] then
-                    inc_line()
-                else
-                    nextchar()
-                end
+                nextchar()
             end
         end
         local delim = string.rep("=", sep)
@@ -237,11 +208,7 @@ return function(read, warn)
                     end
                 end
                 add_buffer(ch)
-                if IsNewLine[ch] then
-                    inc_line()
-                else
-                    nextchar()
-                end
+                nextchar()
             end
         end
         return get_buffer(0, 0)
@@ -273,15 +240,11 @@ return function(read, warn)
         elseif c == "z" then
             nextchar()
             while is.space(ch) do
-                if IsNewLine[ch] then
-                    inc_line()
-                else
-                    nextchar()
-                end
+                nextchar()
             end
         elseif IsNewLine[c] then
             add_buffer("\n")
-            inc_line()
+            nextchar()
         elseif c == "\\" then
             add_buffer("\\")
             add_buffer(c)
@@ -376,7 +339,7 @@ return function(read, warn)
             local c = ch
             if IsNewLine[ch] then
                 tab = nil
-                inc_line()
+                nextchar()
                 local ind = 0
                 while ch == " " or ch == "\t" do
                     if not tab then
@@ -558,43 +521,43 @@ return function(read, warn)
     end
     local lex = function()
         local token, value
+        local line, col
         while true do
+            line = state.line
+            col = state.col
+            if ch ~= END_OF_STREAM and col > 1 then
+                col = col - 1
+            end
             token, value = tokenize()
             if token ~= "TK_comment" then
                 break
             end
         end
-        return token, value
+        return token, value, line, col
     end
     local step = function()
-        state.prevline = state.line
-        state.prevcol = state.col
         if lookahead.token == "TK_eof" then
             if state.token ~= "TK_eof" then
-                state.token, state.value = lex()
+                state.token, state.value, state.prevline, state.prevcol = lex()
             end
         else
             state.token, state.value = lookahead.token, lookahead.value
+            state.prevline, state.prevcol = lookahead.line, lookahead.col
             lookahead.token = "TK_eof"
         end
         return state.token, state.value
     end
     local preview = function()
         if lookahead.token == "TK_eof" then
-            lookahead.token, lookahead.value = lex()
+            lookahead.token, lookahead.value, lookahead.line, lookahead.col = lex()
         end
         return lookahead.token, lookahead.value
     end
     local loc = function()
-        return {line = state.line, col = state.prevcol or state.col}
+        return {line = state.prevline or state.line, col = state.prevcol or state.col}
     end
     local lexer = setmetatable(state, {__index = {tostr = token2str, astext = token2text, step = step, next = preview, loc = loc}})
     nextchar()
-    if ch == "\xef" and n >= 2 and char(0) == "\xbb" and char(1) == "\xbf" then
-        n = n - 2
-        p = p + 2
-        nextchar()
-    end
     stack.push(0)
     if ch == "#" then
         repeat
@@ -603,7 +566,7 @@ return function(read, warn)
                 return lexer
             end
         until IsNewLine[ch]
-        inc_line()
+        nextchar()
     end
     return lexer
 end

@@ -12,7 +12,7 @@ var build = chars.build
 var END_OF_STREAM = -1
 
 var TokenSymbol = { TK_name = 'identifier', TK_indent = '<indent>', TK_dedent = '<dedent>', TK_newline = '<newline>', TK_eof = '<eof>' }
-var IsNewLine = { ['\n'] = true, ['\r'] = true }
+var IsNewLine = { ['\n'] = true }
 var IsEscape = { a = true, b = true, f = true, n = true, r = true, t = true, v = true }
 
 
@@ -28,10 +28,7 @@ var token2text = \tok ->
 		return "`" .. token2str(tok) .. "`"
 	return t
 
-return \read, warn ->
-
-	-- input stream pointer
-	var data, n, p = nil, 0, 0
+return \stream, warn ->
 	-- char and buffer under process
 	var ch, comment_buff = '', ''
 	var buff, bi = {}, 1
@@ -43,6 +40,8 @@ return \read, warn ->
 	var lookahead = {
 		token = 'TK_eof'
 		, value = nil
+		, line = 1
+		, col = 1
 	}
 	-- state to be returned to caller
 	var state = {
@@ -76,29 +75,14 @@ return \read, warn ->
 		warn(state.line, col, 3, string.format(em, ...))
 
 
-	var popchar = ->
-		var k = p
-		var c = string.sub(data, k, k)
-		p = k + 1
-		n = n - 1
-		return c
-
-	var fill = ->
-		var stream = read()
-		if not stream
-			return END_OF_STREAM
-		data, n, p = stream, #stream, 1
-		return popchar()
-
 	var nextchar = ->
-		var c = n > 0 and popchar() or fill()
-		state.col = state.col + 1
+		var c = stream.next()
+		if not c
+			c = END_OF_STREAM
 		ch = c
+		var pos = stream.loc()
+		state.line, state.col = pos.line, pos.col
 		return c
-
-	var char = \m ->
-		var k = p + m
-		return string.sub(data, k, k)
 
 	var add_buffer = \c ->
 		buff[bi] = c
@@ -117,17 +101,6 @@ return \read, warn ->
 		var s = comment_buff
 		comment_buff = ''
 		return s
-
-
-	var inc_line = ->
-		var old = ch
-		-- skip `\n` or `\r`
-		nextchar()
-		if IsNewLine[ch] and ch ~= old
-			-- skip `\n\r` or `\r\n`
-			nextchar()
-		state.line = state.line + 1
-		state.col = 1
 
 
 	var add_eq = ->
@@ -192,9 +165,7 @@ return \read, warn ->
 		-- skip 2nd [
 		add_buffer(ch)
 		nextchar()
-		--if IsNewLine[ch] -- string starts with a newline?
-		--    inc_line() -- skip it
-		--
+
 		while true
 			if ch == END_OF_STREAM
 				lex_error('TK_eof', (comment and "unfinished long comment" or "unfinished long string") .. " from line %d till", begin)
@@ -207,10 +178,7 @@ return \read, warn ->
 					break
 			else
 				add_buffer(ch)
-				if IsNewLine[ch]
-					inc_line()
-				else
-					nextchar()
+				nextchar()
 
 		var delim = string.rep('=', sep)
 		var quote = string.rep('`', sep + 1)
@@ -221,8 +189,6 @@ return \read, warn ->
 
 	var read_long_bquote_string = \sep, comment ->
 		var begin = state.line
-		--if IsNewLine[ch] -- string starts with a newline?
-		--    inc_line() -- skip it
 		while true
 			if ch == END_OF_STREAM
 				lex_error('TK_eof', (comment and "unfinished long comment" or "unfinished long string") .. " from line %d till", begin)
@@ -237,10 +203,7 @@ return \read, warn ->
 						lex_error(nil, "long string delimiter conflict due to " .. ch .. delim .. ch .. "; please use more than " .. sep .. " backquotes")
 
 				add_buffer(ch)
-				if IsNewLine[ch]
-					inc_line()
-				else
-					nextchar()
+				nextchar()
 		--return get_buffer(2 + sep, 2 + sep)
 		return get_buffer(0, 0)
 
@@ -272,14 +235,11 @@ return \read, warn ->
 		else if c == 'z' -- Skip whitespace.
 			nextchar()
 			while is.space(ch)
-				if IsNewLine[ch]
-					inc_line()
-				else
-					nextchar()
+				nextchar()
 
 		else if IsNewLine[c]
 			add_buffer('\n')
-			inc_line()
+			nextchar()
 		else if c == '\\'
 			add_buffer('\\')
 			add_buffer(c)
@@ -373,7 +333,7 @@ return \read, warn ->
 			var c = ch
 			if IsNewLine[ch]
 				tab = nil  -- if come back here, is an empty line, reset tab space tracker
-				inc_line()
+				nextchar()
 				var ind = 0
 				while ch == ' ' or ch == '\t'
 					if not tab
@@ -555,31 +515,35 @@ return \read, warn ->
 
 	var lex = ->
 		var token, value
+		var line, col
 		while true
+			line = state.line
+			col = state.col
+			if ch ~= END_OF_STREAM and col > 1
+				col = col - 1
 			token, value = tokenize()
 			if token ~= 'TK_comment'
 				break
-		return token, value
+		return token, value, line, col
 
 	var step = ->
-		state.prevline = state.line
-		state.prevcol = state.col
 		if lookahead.token == 'TK_eof' -- No lookahead token
 			if state.token ~= 'TK_eof'
-				state.token, state.value = lex()
+				state.token, state.value, state.prevline, state.prevcol = lex()
 		else
 			state.token, state.value = lookahead.token, lookahead.value
+			state.prevline, state.prevcol = lookahead.line, lookahead.col
 			lookahead.token = 'TK_eof'
 		return state.token, state.value
 
 	var preview = ->
 		if lookahead.token == 'TK_eof'
-			lookahead.token, lookahead.value = lex()
+			lookahead.token, lookahead.value, lookahead.line, lookahead.col = lex()
 		return lookahead.token, lookahead.value
 
 	var loc = ->
 		return {
-			line = state.line
+			line = state.prevline or state.line
 			, col = state.prevcol or state.col
 		}
 
@@ -593,10 +557,6 @@ return \read, warn ->
 
 
 	nextchar()
-	if ch == '\xef' and n >= 2 and char(0) == '\xbb' and char(1) == '\xbf' -- Skip UTF-8 BOM (if buffered).
-		n = n - 2
-		p = p + 2
-		nextchar()
 
 	stack.push(0)
 	if ch == '#'
@@ -604,6 +564,6 @@ return \read, warn ->
 			nextchar()
 			if ch == END_OF_STREAM return lexer
 		until IsNewLine[ch]
-		inc_line()
+		nextchar()
 
 	return lexer

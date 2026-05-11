@@ -5,13 +5,13 @@ local Tag = require("lt.tag")
 local TStmt = Tag.Stmt
 local TExpr = Tag.Expr
 local TType = Tag.Type
-local make = function(tag, node, ls)
+local make = function(tag, node, loc)
     assert("table" == type(node))
-    assert("number" == type(ls.line))
-    assert("number" == type(ls.col))
+    assert("number" == type(loc.line))
+    assert("number" == type(loc.col))
     node.tag = tag
-    node.line = ls.line
-    node.col = ls.col
+    node.line = loc.line
+    node.col = loc.col
     return node
 end
 local Statement = {

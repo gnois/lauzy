@@ -1,10 +1,10 @@
-local read = require("lt.read")
 local lex = require("lt.lex")
+local reader = require("lt.read")
 
 local filename = assert(..., "usage: luajit run-lex.lua <filename>")
 
-local reader = read.file(filename)
-local ls = lex(reader, function() end)
+local source = reader.file(filename)
+local ls = lex(reader.stream(source), function() end)
 
 repeat
     ls.step()

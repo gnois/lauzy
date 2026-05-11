@@ -4,13 +4,13 @@ var TStmt = Tag.Stmt
 var TExpr = Tag.Expr
 var TType = Tag.Type
 
-var make = \tag, node, ls ->
+var make = \tag, node, loc ->
 	assert('table' == type(node))
-	assert('number' == type(ls.line))
-	assert('number' == type(ls.col))
+	assert('number' == type(loc.line))
+	assert('number' == type(loc.col))
 	node.tag = tag
-	node.line = ls.line
-	node.col = ls.col
+	node.line = loc.line
+	node.col = loc.col
 	return node
 
 var Statement = {

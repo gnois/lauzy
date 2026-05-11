@@ -73,7 +73,7 @@ return \ls, warn ->
 
 	var lex_match = \what, who, line ->
 		if not lex_opt(what)
-			if line == ls.line
+			if line == ls.loc().line
 				err_expect(what)
 			else
 				err_instead(3, "%s expected to match %s at line %d", ls.astext(what), ls.astext(who), line)
@@ -170,16 +170,18 @@ return \ls, warn ->
 					key = Expr.string(name, false, at)
 				-- accept string
 				else if ls.token == 'TK_string'
-					key = Expr.string(ls.value, false, ls)
+					var at = ls.loc()
+					key = Expr.string(ls.value, false, at)
 					ls.step()
 				-- accept keyword
 				else
 					var name = is_keyword()
 					if name
+						var at = ls.loc()
 						if ls.token == 'TK_true' or ls.token == 'TK_false'
-							key = Expr.bool(ls.token == 'TK_true', ls)
+							key = Expr.bool(ls.token == 'TK_true', at)
 						else
-							key = Expr.string(name, false, ls)
+							key = Expr.string(name, false, at)
 					else
 						err_syntax("invalid table key " .. (ls_value() or ls.astext(ls.token)))
 					ls.step()
@@ -226,12 +228,12 @@ return \ls, warn ->
 			else
 				var name = is_keyword()
 				if name
-					ctor = Expr.id(name, ls)
+					ctor = Expr.id(name, ls.loc())
 				else if destruct and ls.token == '*'
 					if starred
 						err_syntax(ls.astext(ls.token) .. " already defined on line " .. starred)
-					starred = ls.line
-					ctor = Expr.id(ls.token, ls)
+					starred = ls.loc().line
+					ctor = Expr.id(ls.token, ls.loc())
 				ls.step()
 
 			if ctor
@@ -242,16 +244,17 @@ return \ls, warn ->
 							p = p + 1
 							params[p] = Expr.id(lex_str())
 						else if ls.token == '...'
+							var at = ls.loc()
 							ls.step()
 							p = p + 1
-							params[p] = Expr.vararg(ls)
+							params[p] = Expr.vararg(at)
 							break
 					until not lex_opt(',')
 
 				if destruct
 					if not lex_opt('->') and p > 0
 						err_expect('->')
-					body = parse_block(ls.line, '->')
+					body = parse_block(ls.loc().line, '->')
 
 				lex_opt('TK_newline')
 				v = v + 1
@@ -316,9 +319,10 @@ return \ls, warn ->
 	expr_unop = ->
 		var tk = ls.token
 		if tk == 'TK_not' or tk == '-' or tk == '#'
+			var loc = ls.loc()
 			ls.step()
 			var v = expr_binop(operator.unary_priority)
-			return Expr.unary(ls.tostr(tk), v, ls)
+			return Expr.unary(ls.tostr(tk), v, loc)
 		else
 			return expr_simple()
 
@@ -328,9 +332,10 @@ return \ls, warn ->
 		var v = expr_unop()
 		var op = ls.tostr(ls.token)
 		while operator.is_binop(op) and operator.left_priority(op) > limit
+			var loc = ls.loc()
 			ls.step()
 			var v2, nextop = expr_binop(operator.right_priority(op))
-			v = Expr.binary(op, v, v2, ls)
+			v = Expr.binary(op, v, v2, loc)
 			op = nextop
 		return v, op
 
@@ -343,7 +348,7 @@ return \ls, warn ->
 	expr_primary = ->
 		var v, vk
 		if ls.token == '('
-			var line = ls.line
+			var line = ls.loc().line
 			ls.step()
 			vk, v = Kind.Expr, ast.bracket(expr())
 			lex_match(')', '(', line)
@@ -365,10 +370,11 @@ return \ls, warn ->
 				ls.step() -- skip dot
 				var kw = is_keyword()
 				if kw
+					var key_at = ls.loc()
 					if ls.token == 'TK_true' or ls.token == 'TK_false'
-						key = Expr.bool(ls.token == 'TK_true', ls)
+						key = Expr.bool(ls.token == 'TK_true', key_at)
 					else
-						key = Expr.string(kw, false, ls)
+						key = Expr.string(kw, false, key_at)
 					vk, v = Kind.Index, Expr.index(v, key, at)
 					ls.step()
 				else
@@ -436,7 +442,7 @@ return \ls, warn ->
 
 	-- Parse function call argument list
 	parse_args = ->
-		var line = ls.line
+		var line = ls.loc().line
 		lex_check('(')
 
 		var dented = false
@@ -517,15 +523,15 @@ return \ls, warn ->
 
 	var parse_if = \loc ->
 		var tests, blocks = {}, {}
-		blocks[#blocks+1] = parse_then(tests, ls.line)
+		blocks[#blocks+1] = parse_then(tests, ls.loc().line)
 		var else_branch
 		while ls.token == 'TK_else' or NewLine[ls.token] and ls.next() == 'TK_else'
 			lex_opt('TK_newline')
 			ls.step()
 			if ls.token == 'TK_if'
-				blocks[#blocks+1] = parse_then(tests, ls.line)
+				blocks[#blocks+1] = parse_then(tests, ls.loc().line)
 			else
-				else_branch = parse_block(ls.line, 'TK_else')
+				else_branch = parse_block(ls.loc().line, 'TK_else')
 				break
 		return Stmt.if(tests, blocks, else_branch, loc)
 
@@ -608,14 +614,14 @@ return \ls, warn ->
 		var stmt, islast = nil, false
 		var body, b = {}, 0
 		while not islast and not EndOfBlock[ls.token]
-			stmted = ls.line
+			stmted = ls.loc().line
 			skip_ends()
 			stmt, islast = parse_stmt()
 			b = b + 1
 			body[b] = stmt
 			skip_ends()
 			-- disallow multiple statement in one line
-			if stmted == ls.line
+			if stmted == ls.loc().line
 				if ls.token ~= 'TK_eof' and ls.token ~= 'TK_dedent' and ls.next() ~= 'TK_eof'
 					err_instead(3, "statement should end. %s expected", ls.astext('TK_newline'))
 		return body
@@ -651,10 +657,11 @@ return \ls, warn ->
 					params[n] = Expr.id(lex_str())
 
 				else if ls.token == '...'
+					var at = ls.loc()
 					ls.step()
 					varargs = true
 					n = n + 1
-					params[n] = Expr.vararg(ls)
+					params[n] = Expr.vararg(at)
 					break
 				else
 					err_instead(2, "parameter expected in function declaration")

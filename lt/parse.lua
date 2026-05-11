@@ -81,7 +81,7 @@ return function(ls, warn)
     end
     local lex_match = function(what, who, line)
         if not lex_opt(what) then
-            if line == ls.line then
+            if line == ls.loc().line then
                 err_expect(what)
             else
                 err_instead(3, "%s expected to match %s at line %d", ls.astext(what), ls.astext(who), line)
@@ -169,15 +169,17 @@ return function(ls, warn)
                     local name, at = lex_str()
                     key = Expr.string(name, false, at)
                 elseif ls.token == "TK_string" then
-                    key = Expr.string(ls.value, false, ls)
+                    local at = ls.loc()
+                    key = Expr.string(ls.value, false, at)
                     ls.step()
                 else
                     local name = is_keyword()
                     if name then
+                        local at = ls.loc()
                         if ls.token == "TK_true" or ls.token == "TK_false" then
-                            key = Expr.bool(ls.token == "TK_true", ls)
+                            key = Expr.bool(ls.token == "TK_true", at)
                         else
-                            key = Expr.string(name, false, ls)
+                            key = Expr.string(name, false, at)
                         end
                     else
                         err_syntax("invalid table key " .. (ls_value() or ls.astext(ls.token)))
@@ -253,9 +255,10 @@ return function(ls, warn)
     expr_unop = function()
         local tk = ls.token
         if tk == "TK_not" or tk == "-" or tk == "#" then
+            local loc = ls.loc()
             ls.step()
             local v = expr_binop(operator.unary_priority)
-            return Expr.unary(ls.tostr(tk), v, ls)
+            return Expr.unary(ls.tostr(tk), v, loc)
         else
             return expr_simple()
         end
@@ -264,9 +267,10 @@ return function(ls, warn)
         local v = expr_unop()
         local op = ls.tostr(ls.token)
         while operator.is_binop(op) and operator.left_priority(op) > limit do
+            local loc = ls.loc()
             ls.step()
             local v2, nextop = expr_binop(operator.right_priority(op))
-            v = Expr.binary(op, v, v2, ls)
+            v = Expr.binary(op, v, v2, loc)
             op = nextop
         end
         return v, op
@@ -277,7 +281,7 @@ return function(ls, warn)
     expr_primary = function()
         local v, vk
         if ls.token == "(" then
-            local line = ls.line
+            local line = ls.loc().line
             ls.step()
             vk, v = Kind.Expr, ast.bracket(expr())
             lex_match(")", "(", line)
@@ -300,10 +304,11 @@ return function(ls, warn)
                 ls.step()
                 local kw = is_keyword()
                 if kw then
+                    local key_at = ls.loc()
                     if ls.token == "TK_true" or ls.token == "TK_false" then
-                        key = Expr.bool(ls.token == "TK_true", ls)
+                        key = Expr.bool(ls.token == "TK_true", key_at)
                     else
-                        key = Expr.string(kw, false, ls)
+                        key = Expr.string(kw, false, key_at)
                     end
                     vk, v = Kind.Index, Expr.index(v, key, at)
                     ls.step()
@@ -362,7 +367,7 @@ return function(ls, warn)
         return Stmt.forin(vars, exps, body, loc)
     end
     parse_args = function()
-        local line = ls.line
+        local line = ls.loc().line
         lex_check("(")
         local dented = false
         local args, a = {}, 0
@@ -438,15 +443,15 @@ return function(ls, warn)
     end
     local parse_if = function(loc)
         local tests, blocks = {}, {}
-        blocks[#blocks + 1] = parse_then(tests, ls.line)
+        blocks[#blocks + 1] = parse_then(tests, ls.loc().line)
         local else_branch
         while ls.token == "TK_else" or NewLine[ls.token] and ls.next() == "TK_else" do
             lex_opt("TK_newline")
             ls.step()
             if ls.token == "TK_if" then
-                blocks[#blocks + 1] = parse_then(tests, ls.line)
+                blocks[#blocks + 1] = parse_then(tests, ls.loc().line)
             else
-                else_branch = parse_block(ls.line, "TK_else")
+                else_branch = parse_block(ls.loc().line, "TK_else")
                 break
             end
         end
@@ -521,13 +526,13 @@ return function(ls, warn)
         local stmt, islast = nil, false
         local body, b = {}, 0
         while not islast and not EndOfBlock[ls.token] do
-            stmted = ls.line
+            stmted = ls.loc().line
             skip_ends()
             stmt, islast = parse_stmt()
             b = b + 1
             body[b] = stmt
             skip_ends()
-            if stmted == ls.line then
+            if stmted == ls.loc().line then
                 if ls.token ~= "TK_eof" and ls.token ~= "TK_dedent" and ls.next() ~= "TK_eof" then
                     err_instead(3, "statement should end. %s expected", ls.astext("TK_newline"))
                 end
@@ -563,10 +568,11 @@ return function(ls, warn)
                     n = n + 1
                     params[n] = Expr.id(lex_str())
                 elseif ls.token == "..." then
+                    local at = ls.loc()
                     ls.step()
                     varargs = true
                     n = n + 1
-                    params[n] = Expr.vararg(ls)
+                    params[n] = Expr.vararg(at)
                     break
                 else
                     err_instead(2, "parameter expected in function declaration")

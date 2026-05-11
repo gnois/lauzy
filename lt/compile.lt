@@ -1,5 +1,5 @@
 var term = require('term')
-var read = require('lt.read')
+var reader = require('lt.read')
 var lex = require('lt.lex')
 var scope = require('lt.scope')
 var parse = require('lt.parse')
@@ -114,26 +114,12 @@ return \options, color ->
 	var compile, import
 
 	-- returns type, code, warns
-	compile = \reader ->
+	compile = \source ->
 		var ast, typ, luacode
+		var s = reader.stream(source)
 
-		var chunks = {}
-		var source = nil
-		var get_source = ->
-			if source
-				return source
-			source = table.concat(chunks)
-			return source
-		var wrapped = ->
-			var chunk = reader()
-			if chunk
-				chunks[#chunks + 1] = chunk
-				return chunk
-			get_source()
-			return nil
-
-		var r = report(color, get_source)
-		var lexer = lex(wrapped, r.warn)
+		var r = report(color, s.text)
+		var lexer = lex(s, r.warn)
 		if r.continue()
 			ast = parse(lexer, r.warn)
 			if ast[1]
@@ -145,7 +131,7 @@ return \options, color ->
 					ast = transform(ast)
 					if r.continue()
 						luacode = generate(ast)
-		get_source()
+		s.text()
 		return typ, luacode, r.as_text()
 
 
@@ -169,7 +155,15 @@ return \options, color ->
 		else
 			path = string.gsub(name, "[.]", term.slash)
 		path = path .. ".lt"
-		var typ, code, warns = compile(read.file(path))
+		var fh, err = io.open(path, 'r')
+		if not fh
+			var em = "cannot open import '" .. name .. "' at " .. path
+			if err
+				em = em .. ": " .. err
+			imports[name] = { path = path, type = false, code = nil, warns = em }
+			return false, nil, em, imports
+		fh.close(@)
+		var typ, code, warns = compile(reader.file(path))
 
 		imports[name] = { path = path, type = typ, code = code, warns = warns }
 		return typ, code, warns, imports
@@ -182,5 +176,5 @@ return \options, color ->
 			return import(f, true)
 
 		, string = \src ->
-			return compile(read.string(src))
+			return compile(reader.string(src))
 	}

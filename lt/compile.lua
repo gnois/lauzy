@@ -2,7 +2,7 @@
 -- Generated from compile.lt
 --
 local term = require("term")
-local read = require("lt.read")
+local reader = require("lt.read")
 local lex = require("lt.lex")
 local scope = require("lt.scope")
 local parse = require("lt.parse")
@@ -104,28 +104,11 @@ end
 return function(options, color)
     local imports = {}
     local compile, import
-    compile = function(reader)
+    compile = function(source)
         local ast, typ, luacode
-        local chunks = {}
-        local source = nil
-        local get_source = function()
-            if source then
-                return source
-            end
-            source = table.concat(chunks)
-            return source
-        end
-        local wrapped = function()
-            local chunk = reader()
-            if chunk then
-                chunks[#chunks + 1] = chunk
-                return chunk
-            end
-            get_source()
-            return nil
-        end
-        local r = report(color, get_source)
-        local lexer = lex(wrapped, r.warn)
+        local s = reader.stream(source)
+        local r = report(color, s.text)
+        local lexer = lex(s, r.warn)
         if r.continue() then
             ast = parse(lexer, r.warn)
             if ast[1] then
@@ -144,7 +127,7 @@ return function(options, color)
                 end
             end
         end
-        get_source()
+        s.text()
         return typ, luacode, r.as_text()
     end
     import = function(name, verbatim)
@@ -163,7 +146,17 @@ return function(options, color)
             path = string.gsub(name, "[.]", term.slash)
         end
         path = path .. ".lt"
-        local typ, code, warns = compile(read.file(path))
+        local fh, err = io.open(path, "r")
+        if not fh then
+            local em = "cannot open import '" .. name .. "' at " .. path
+            if err then
+                em = em .. ": " .. err
+            end
+            imports[name] = {path = path, type = false, code = nil, warns = em}
+            return false, nil, em, imports
+        end
+        fh:close()
+        local typ, code, warns = compile(reader.file(path))
         imports[name] = {path = path, type = typ, code = code, warns = warns}
         return typ, code, warns, imports
     end
@@ -171,6 +164,6 @@ return function(options, color)
         local f = string.gsub(src, "%.lt", "")
         return import(f, true)
     end, string = function(src)
-        return compile(read.string(src))
+        return compile(reader.string(src))
     end}
 end

@@ -485,7 +485,7 @@ return function()
             if rhs.tag == TType.Any then
                 return true
             end
-            return false, "may be <any> instead of " .. describe(rhs)
+            return false, "is <any> instead of " .. describe(rhs)
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)

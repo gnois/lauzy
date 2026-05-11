@@ -1,27 +1,195 @@
-var Slab = 4096 - 32
+-- Streaming character reader with stable line/column tracking.
+-- It accepts a chunk source function: source() -> string|nil.
+
+var Slab = 2^13  -- 8K
+
 
 var string_reader = \src ->
 	var pos = 1
 	return ->
 		var chunk = string.sub(src, pos, pos + Slab)
-		pos = pos + #chunk
-		return #chunk > 0 and chunk or nil
+		var len = #chunk
+		if len > 0
+			pos = pos + len
+			return chunk
 
 
 var file_reader = \filename ->
 	var f, err
 	if filename
 		f, err = io.open(filename, 'r')
-		if not f
+		if not f and err
 			io.write(err)
 			io.write('\n')
 	else
 		f = io.stdin
-	
 	return ->
 		return f and f.read(@, Slab)
+
+
+var stream = \source ->
+	var chunks = {}
+	var all = {}
+	var text = nil
+	var head = 1
+	var head_pos = 1
+	var eof = false
+
+	var line = 1
+	var col = 1
+
+	var compact = ->
+		if head <= 16
+			return
+		var write = 1
+		for i = head, #chunks
+			chunks[write] = chunks[i]
+			write = write + 1
+		for i = write, #chunks
+			chunks[i] = nil
+		head = 1
+
+	var has_loaded = \offset ->
+		var idx = head
+		var pos = head_pos
+		var remain = offset or 0
+		while idx <= #chunks
+			var chunk = chunks[idx]
+			var avail = #chunk - pos + 1
+			if remain < avail
+				return true
+			remain = remain - avail
+			idx = idx + 1
+			pos = 1
+		return false
+
+	var ensure_loaded = \offset ->
+		offset = offset or 0
+		while not has_loaded(offset) and not eof
+			var s = source()
+			if not s or #s == 0
+				eof = true
+				break
+			chunks[#chunks + 1] = s
+			all[#all + 1] = s
+		return has_loaded(offset)
+
+	var source_text = ->
+		while not eof
+			var s = source()
+			if not s or #s == 0
+				eof = true
+				break
+			chunks[#chunks + 1] = s
+			all[#all + 1] = s
+		if not text
+			text = table.concat(all)
+		return text
+
+	var peek_raw = \offset ->
+		offset = offset or 0
+		if not ensure_loaded(offset)
+			return nil
+		var idx = head
+		var pos = head_pos
+		var remain = offset
+		while idx <= #chunks
+			var chunk = chunks[idx]
+			var avail = #chunk - pos + 1
+			if remain < avail
+				var at = pos + remain
+				return string.sub(chunk, at, at)
+			remain = remain - avail
+			idx = idx + 1
+			pos = 1
+		return nil
+
+	var advance_raw = \count ->
+		count = count or 1
+		while count > 0
+			if not ensure_loaded(0)
+				return false
+			head_pos = head_pos + 1
+			while head <= #chunks and head_pos > #chunks[head]
+				head = head + 1
+				head_pos = 1
+			count = count - 1
+		compact()
+		return true
+
+	var read_raw = ->
+		var c = peek_raw(0)
+		if c
+			advance_raw(1)
+		return c
+
+	var skip_utf8_bom = ->
+		if peek_raw(0) == '\xef' and peek_raw(1) == '\xbb' and peek_raw(2) == '\xbf'
+			advance_raw(3)
+
+	var is_newline_pair = \a, b ->
+		return (a == '\r' and b == '\n') or (a == '\n' and b == '\r')
+
+	var peek = \offset ->
+		offset = offset or 0
+		var seen = 0
+		var raw_off = 0
+		while true
+			var c = peek_raw(raw_off)
+			if not c
+				return nil
+			if c == '\r' or c == '\n'
+				if seen == offset
+					return '\n'
+				seen = seen + 1
+				var n = peek_raw(raw_off + 1)
+				if is_newline_pair(c, n)
+					raw_off = raw_off + 2
+				else
+					raw_off = raw_off + 1
+			else
+				if seen == offset
+					return c
+				seen = seen + 1
+				raw_off = raw_off + 1
+
+	var next = ->
+		var c = peek_raw(0)
+		if not c
+			return nil
+		if c == '\r' or c == '\n'
+			var n = peek_raw(1)
+			if is_newline_pair(c, n)
+				advance_raw(2)
+			else
+				advance_raw(1)
+			line = line + 1
+			col = 1
+			return '\n'
+		advance_raw(1)
+		col = col + 1
+		return c
+
+	var loc = ->
+		return { line = line, col = col }
+
+	skip_utf8_bom()
+
+	return {
+		peek = peek
+		, next = next
+		, loc = loc
+		, text = source_text
+		, line = \ -> return line
+		, col = \ -> return col
+		, peek_raw = peek_raw
+		, next_raw = read_raw
+		, eof = \ -> return not peek_raw(0)
+	}
+
 
 return {
 	string = string_reader
 	, file = file_reader
+	, stream = stream
 }

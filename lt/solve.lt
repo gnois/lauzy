@@ -413,7 +413,7 @@ return ->
 		if lhs.tag == TType.Any
 			if rhs.tag == TType.Any
 				return true
-			return false, "may be <any> instead of " .. describe(rhs)
+			return false, "is <any> instead of " .. describe(rhs)
 
 		if lhs.tag == TType.New
 			var lhsv = ensure_var(lhs)
