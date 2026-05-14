@@ -76,12 +76,12 @@ return function(stream, warn)
         warn(state.line, col, 3, string.format(em, ...))
     end
     local nextchar = function()
+        local pos = stream.loc()
         local c = stream.next()
         if not c then
             c = END_OF_STREAM
         end
         ch = c
-        local pos = stream.loc()
         state.line, state.col = pos.line, pos.col
         return c
     end
@@ -525,9 +525,6 @@ return function(stream, warn)
         while true do
             line = state.line
             col = state.col
-            if ch ~= END_OF_STREAM and col > 1 then
-                col = col - 1
-            end
             token, value = tokenize()
             if token ~= "TK_comment" then
                 break

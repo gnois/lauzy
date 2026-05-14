@@ -76,11 +76,11 @@ return \stream, warn ->
 
 
 	var nextchar = ->
+		var pos = stream.loc()
 		var c = stream.next()
 		if not c
 			c = END_OF_STREAM
 		ch = c
-		var pos = stream.loc()
 		state.line, state.col = pos.line, pos.col
 		return c
 
@@ -519,8 +519,6 @@ return \stream, warn ->
 		while true
 			line = state.line
 			col = state.col
-			if ch ~= END_OF_STREAM and col > 1
-				col = col - 1
 			token, value = tokenize()
 			if token ~= 'TK_comment'
 				break

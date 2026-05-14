@@ -16,8 +16,6 @@ var Kind = { Expr = 'Expr', Var = 'Var', Field = 'Field', Index = 'Index', Call 
 
 return \ls, warn ->
 	-- disallow multiple statement on one line
-	-- need to be in file scope coz parse_stmts() is recursive
-	var stmted  -- keep the line number that we parsed
 
 	-----  Error reporting ----------------
 	var parse_error = \severe, em, ... ->
@@ -614,14 +612,16 @@ return \ls, warn ->
 		var stmt, islast = nil, false
 		var body, b = {}, 0
 		while not islast and not EndOfBlock[ls.token]
-			stmted = ls.loc().line
 			skip_ends()
+			if EndOfBlock[ls.token]
+				break
+			var stmt_line = ls.loc().line
 			stmt, islast = parse_stmt()
 			b = b + 1
 			body[b] = stmt
 			skip_ends()
 			-- disallow multiple statement in one line
-			if stmted == ls.loc().line
+			if stmt_line == ls.loc().line
 				if ls.token ~= 'TK_eof' and ls.token ~= 'TK_dedent' and ls.next() ~= 'TK_eof'
 					err_instead(3, "statement should end. %s expected", ls.astext('TK_newline'))
 		return body

@@ -27,7 +27,6 @@ local Kind = {
     , Union = "Union"
 }
 return function(ls, warn)
-    local stmted
     local parse_error = function(severe, em, ...)
         local loc = ls.loc()
         warn(loc.line, loc.col, severe, string.format(em, ...))
@@ -526,13 +525,16 @@ return function(ls, warn)
         local stmt, islast = nil, false
         local body, b = {}, 0
         while not islast and not EndOfBlock[ls.token] do
-            stmted = ls.loc().line
             skip_ends()
+            if EndOfBlock[ls.token] then
+                break
+            end
+            local stmt_line = ls.loc().line
             stmt, islast = parse_stmt()
             b = b + 1
             body[b] = stmt
             skip_ends()
-            if stmted == ls.loc().line then
+            if stmt_line == ls.loc().line then
                 if ls.token ~= "TK_eof" and ls.token ~= "TK_dedent" and ls.next() ~= "TK_eof" then
                     err_instead(3, "statement should end. %s expected", ls.astext("TK_newline"))
                 end
