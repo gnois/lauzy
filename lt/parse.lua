@@ -18,14 +18,7 @@ local EndOfBlock = {
     , [","] = true
 }
 local NewLine = {TK_newline = true}
-local Kind = {
-    Expr = "Expr"
-    , Var = "Var"
-    , Field = "Field"
-    , Index = "Index"
-    , Call = "Call"
-    , Union = "Union"
-}
+local Kind = {Expr = "Expr", Var = "Var", Field = "Field", Index = "Index", Call = "Call"}
 return function(ls, warn)
     local parse_error = function(severe, em, ...)
         local loc = ls.loc()
@@ -407,7 +400,7 @@ return function(ls, warn)
     end
     local parse_call_assign = function(loc)
         local v, vk = expr_primary()
-        if vk == Kind.Call or vk == Kind.Union then
+        if vk == Kind.Call then
             return Stmt.expression(v, loc)
         end
         local lhs = {}

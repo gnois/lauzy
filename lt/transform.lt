@@ -5,18 +5,6 @@ var TExpr = Tag.Expr
 
 var id = ast.Expr.id
 
-var setmt = \tbl, mt, node ->
-	return ast.Expr.call(id("setmetatable", node), {tbl, mt}, node)
-
-var str = \txt, node ->
-	return ast.Expr.string(txt, false, node)
-
---`
-var call_stmt = \lambda, args, node ->
-	return ast.Stmt.expression(ast.Expr.call(lambda, args, node), node)
---`
-
-
 return \stmts ->
 
 	var Stmt = {}
@@ -39,119 +27,6 @@ return \stmts ->
 			list[i] = visit_expr(node)
 		return list
 
-
-	-- disjoint union constructor
-	var construct = \node ->
-		var uniq, u = {'.'}, 1
-
-		var _id = id("_id", node)
-		var _nm = id("_nm", node)
-		var _mk = id("_mk", node)
-		var mt = ast.Expr.table({
-			{ _id, str("__metatable", node) }
-		}, node)
-
-		var maker = ast.Stmt.local({_mk}, {
-			ast.Expr.function({_nm, ast.Expr.vararg(node)}, {
-				ast.Stmt.return({
-					setmt(ast.Expr.table({
-						{ _nm, str('!', node) }
-						, { ast.Expr.vararg(node) }
-					}, node), mt, node)
-				}, node)
-			}, node)
-		}, node)
-
-		var vks = {}
-		-- ctor table
-		for i, v in ipairs(node.variants)
-			u = u + 1
-			uniq[u] = v.ctor.name
-			var key = str(v.ctor.name, v.ctor)
-			var params = { key }
-			for n, p in ipairs(v.params)
-				u = u + 1
-				uniq[u] = p.name or '.'
-				params[n+1] = p
-			var val = ast.Expr.function(v.params, { ast.Stmt.return({ast.Expr.call(_mk, params , v.ctor)}, v.ctor) }, node)
-			vks[i] = { val, key }
-
-		var tbl = ast.Expr.table(vks, node)
-
-		var unique_str = str(table.concat(uniq), node)
-
-		var _v = id("_v", node)
-		var test = ast.Expr.binary("and"
-			, ast.Expr.binary("=="
-				, str("table", node)
-				, ast.Expr.call(id("type", node), {_v}, node)
-				, node
-			)
-			, ast.Expr.binary("=="
-				, _id
-				, ast.Expr.call(id("getmetatable", node), {_v}, node)
-				, node
-			)
-			, node
-		)
-		var testfn = ast.Expr.function({id("_t", node), _v}, {
-			ast.Stmt.if({test}, {
-				{ ast.Stmt.return({ast.Expr.index(_v, str('!', node), node), ast.Expr.call(id("unpack", node), {_v}, node)}, node) }
-			}, nil, node)
-		}, node)
-		var callable = ast.Expr.table({
-			{ testfn, str("__call", node) }
-		}, node)
-
-		var lambda = ast.Expr.function({_id}, {
-			maker
-			, ast.Stmt.return({setmt(tbl, callable, node)}, node)
-		}, node)
-
-		return ast.Expr.call(lambda, {unique_str}, node)
-
-	-- disjoint union destructor
-	var destruct = \node ->
-
-		var ret_call = \params, body, args, loc ->
-			return ast.Stmt.return({ ast.Expr.call(
-				ast.Expr.function(params, body, loc)
-				, args
-				, loc
-			)}, loc)
-
-		-- must use if-elseif-else, in case user never return in one of the branch
-		var tests, blocks, n = {}, {}, 0
-		var els
-		var _nm = id("_nm", node)
-
-		for _, v in ipairs(node.variants)
-			var all = ast.Expr.vararg(v.ctor)
-			var handler = visit_stmts(v.body)
-			if #v.params > 0
-				handler = { ret_call(v.params, handler, {all}, v.ctor) }
-
-			if v.ctor.name == '*'
-				els = handler
-			else
-				n = n + 1
-				blocks[n] = handler
-				tests[n] = ast.Expr.binary("==", str(v.ctor.name, v.ctor), _nm, v.ctor)
-
-		var conds
-		if n > 0
-			conds = { ast.Stmt.if(tests, blocks, els, node) }
-		else if els
-			conds = els
-
-		var lambda = ast.Expr.function({_nm, ast.Expr.vararg(node)}, conds, node)
-
-		var test = visit_expr(node.test)
-		var argm = visit_expr(node.arg)
-		return ast.Expr.call(lambda
-			, { ast.Expr.call(test, {argm}, node) }
-			, node
-		)
 
 
 	--------- Expressions --------------------
@@ -211,11 +86,6 @@ return \stmts ->
 
 		node.args = visit_exprs(node.args)
 		return node
-
-	Expr[TExpr.Union] = \node ->
-		if node.test and node.arg
-			return destruct(node)
-		return construct(node)
 
 	Expr[TExpr.Unary] = \node ->
 		node.right = visit_expr(node.right)

@@ -463,12 +463,6 @@ return \stream, warn ->
 					if ch == ':'
 						nextchar()
 						return '::'
-					--`` no more variant (tagged union) bcoz cannot devise a pattern matching that is flexible
-					-- better to use {tag=xxx, ...}
-					if ch == '!'
-						nextchar()
-						return ':!'
-					--``
 					return ':'
 				else if ch == '<'
 					nextchar()

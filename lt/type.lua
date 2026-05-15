@@ -130,10 +130,7 @@ local flatten_type = function(tag, types)
     return list
 end
 local Type = {
-    any = function()
-        return create(TType.Any, {})
-    end
-    , ["nil"] = function()
+    ["nil"] = function()
         return create(TType.Nil, {})
     end
     , num = function()
@@ -190,9 +187,6 @@ end
 Str[TType.New] = function(t)
     return "T" .. t.id
 end
-Str[TType.Any] = function()
-    return "<any>"
-end
 Str[TType.Nil] = function()
     return "<nil>"
 end
@@ -245,19 +239,13 @@ Str[TType.And] = function(t)
     end
     return table.concat(list, "&")
 end
-local any_t = Type.any()
 local nil_t = Type["nil"]()
 local num_t = Type.num()
 local str_t = Type.str()
 local bool_t = Type.bool()
-local any_vars_t = varargs(any_t)
 local tuple_none_t = Type.tuple({})
-local tuple_any_t = Type.tuple({any_vars_t})
 return {
-    any = function()
-        return any_t
-    end
-    , ["nil"] = function()
+    ["nil"] = function()
         return nil_t
     end
     , num = function()
@@ -269,14 +257,8 @@ return {
     , bool = function()
         return bool_t
     end
-    , any_vars = function()
-        return any_vars_t
-    end
     , tuple_none = function()
         return tuple_none_t
-    end
-    , tuple_any = function()
-        return tuple_any_t
     end
     , tuple = Type.tuple
     , func = Type.func

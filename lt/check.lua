@@ -21,23 +21,25 @@ return function(scope, stmts, warn, import, typecheck)
     local with_lvl = function(delta, fn, ...)
         local prev = lvl
         lvl = lvl + (delta or 0)
-        local out = fn(...)
+        local ok, out = pcall(fn, ...)
         lvl = prev
+        if not ok then
+            error(out, 0)
+        end
         return out
     end
     local new = function(level)
         return solv.fresh_var(level or lvl)
     end
-    local fail = function(node)
-        local msg = (node.tag or "nil") .. " cannot match a statement type"
-        if node.line and node.col then
-            warn(node.line, node.col, 3, msg)
-        else
-            error(msg)
+    local fail = function(node, node_type)
+        if node then
+            local msg = (node.tag or "nil") .. " cannot match " .. node_type .. " type"
+            if node.line and node.col then
+                warn(node.line, node.col, 3, msg)
+                return 
+            end
         end
-    end
-    local describe_type = function(t)
-        return ty.tostr(solv.apply(t))
+        error("node is nil or missing line and column info")
     end
     local maybe_self = function(name)
         if name == "@" then
@@ -78,7 +80,7 @@ return function(scope, stmts, warn, import, typecheck)
         if typecheck then
             local ok, err = solv.constrain(actual, expected)
             if not ok then
-                local snapshot = " [" .. describe_type(actual) .. " <: " .. describe_type(expected) .. "]"
+                local snapshot = " [" .. ty.tostr(solv.apply(actual)) .. " <: " .. ty.tostr(solv.apply(expected)) .. "]"
                 warn(node.line, node.col, 1, msg .. err .. snapshot)
             end
             return ok and actual or false
@@ -145,15 +147,12 @@ return function(scope, stmts, warn, import, typecheck)
                 return vt, t
             end
         end
-        return ty.any(), t
-    end
-    local expected_fn_type = function(atypes)
-        return ty.func(ty.tuple(atypes), ty.tuple_any())
+        return new(), t
     end
     local check_fn = function(ftype, atypes, node, fname)
         if typecheck then
             local fn = solv.apply(ftype)
-            local expected = expected_fn_type(atypes)
+            local expected = ty.func(ty.tuple(atypes), ty.tuple({ty.varargs(new())}))
             if fn.tag == TType.New then
                 solv.extend(fn, expected)
             else
@@ -167,7 +166,7 @@ return function(scope, stmts, warn, import, typecheck)
                 end
             end
         end
-        return ty.tuple_any()
+        return ty.tuple({ty.varargs(new())})
     end
     local check_stmts = function(nodes)
         for _, node in ipairs(nodes) do
@@ -175,18 +174,25 @@ return function(scope, stmts, warn, import, typecheck)
             if rule then
                 rule(node)
             else
-                fail(node)
+                fail(node, "statement")
             end
         end
     end
     local check_block = function(nodes)
         scope.enter()
-        check_stmts(nodes)
+        local ok, err = pcall(check_stmts, nodes)
         scope.leave()
+        if not ok then
+            error(err, 0)
+        end
     end
     local infer_expr = function(node)
         local rule = Expr[node.tag]
-        return rule(node)
+        if rule then
+            return rule(node)
+        end
+        fail(node, "expression")
+        return new()
     end
     local infer_exprs = function(nodes, start)
         local types, t = {}, 0
@@ -234,10 +240,10 @@ return function(scope, stmts, warn, import, typecheck)
         if not scope.is_varargs() then
             warn(node.line, node.col, 2, "cannot use `...` in a function without variable arguments")
         end
-        return ty.any_vars()
+        return ty.varargs(new())
     end
     Expr[TExpr.Id] = function(node)
-        local line, t
+        local line, t = nil, new()
         if node.name then
             local name = maybe_self(node.name)
             line, t = scope.declared(name)
@@ -318,7 +324,7 @@ return function(scope, stmts, warn, import, typecheck)
             return check_field(ot, node.idx.value, node)
         end
         check(ty.tbl({}), ot, node, "indexer ")
-        return ty.any(), ot
+        return new(), ot
     end
     Expr[TExpr.Field] = function(node)
         local ot = infer_expr(node.obj)
@@ -327,7 +333,7 @@ return function(scope, stmts, warn, import, typecheck)
     Expr[TExpr.Call] = function(node)
         local arg1 = node.args[1]
         if arg1 and arg1.tag == TExpr.String and node.func.tag == TExpr.Id and node.func.name == "require" then
-            return import(arg1.value) or ty.any()
+            return import(arg1.value) or new()
         end
         local atypes
         local func = node.func
@@ -361,7 +367,7 @@ return function(scope, stmts, warn, import, typecheck)
         local rtype = infer_expr(node.right)
         local op = node.op
         if op == "and" then
-            return rtype
+            return ty["or"](ltype, rtype)
         end
         if arithmetic(op) or relational(op) then
             if op ~= "==" and op ~= "~=" then
@@ -382,10 +388,7 @@ return function(scope, stmts, warn, import, typecheck)
             check_op(strnum, ltype, node, op, node.left, "left")
             return ty.str()
         end
-        return ltype
-    end
-    Expr[TExpr.Union] = function()
-        return ty.any()
+        return ty["or"](ltype, rtype)
     end
     Stmt[TStmt.Expr] = function(node)
         infer_expr(node.expr)

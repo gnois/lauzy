@@ -6,12 +6,6 @@ local Tag = require("lt.tag")
 local TStmt = Tag.Stmt
 local TExpr = Tag.Expr
 local id = ast.Expr.id
-local setmt = function(tbl, mt, node)
-    return ast.Expr.call(id("setmetatable", node), {tbl, mt}, node)
-end
-local str = function(txt, node)
-    return ast.Expr.string(txt, false, node)
-end
 return function(stmts)
     local Stmt = {}
     local Expr = {}
@@ -33,68 +27,6 @@ return function(stmts)
             list[i] = visit_expr(node)
         end
         return list
-    end
-    local construct = function(node)
-        local uniq, u = {"."}, 1
-        local _id = id("_id", node)
-        local _nm = id("_nm", node)
-        local _mk = id("_mk", node)
-        local mt = ast.Expr.table({{_id, str("__metatable", node)}}, node)
-        local maker = ast.Stmt["local"]({_mk}, {ast.Expr["function"]({_nm, ast.Expr.vararg(node)}, {ast.Stmt["return"]({setmt(ast.Expr.table({{_nm, str("!", node)}, {ast.Expr.vararg(node)}}, node), mt, node)}, node)}, node)}, node)
-        local vks = {}
-        for i, v in ipairs(node.variants) do
-            u = u + 1
-            uniq[u] = v.ctor.name
-            local key = str(v.ctor.name, v.ctor)
-            local params = {key}
-            for n, p in ipairs(v.params) do
-                u = u + 1
-                uniq[u] = p.name or "."
-                params[n + 1] = p
-            end
-            local val = ast.Expr["function"](v.params, {ast.Stmt["return"]({ast.Expr.call(_mk, params, v.ctor)}, v.ctor)}, node)
-            vks[i] = {val, key}
-        end
-        local tbl = ast.Expr.table(vks, node)
-        local unique_str = str(table.concat(uniq), node)
-        local _v = id("_v", node)
-        local test = ast.Expr.binary("and", ast.Expr.binary("==", str("table", node), ast.Expr.call(id("type", node), {_v}, node), node), ast.Expr.binary("==", _id, ast.Expr.call(id("getmetatable", node), {_v}, node), node), node)
-        local testfn = ast.Expr["function"]({id("_t", node), _v}, {ast.Stmt["if"]({test}, {{ast.Stmt["return"]({ast.Expr.index(_v, str("!", node), node), ast.Expr.call(id("unpack", node), {_v}, node)}, node)}}, nil, node)}, node)
-        local callable = ast.Expr.table({{testfn, str("__call", node)}}, node)
-        local lambda = ast.Expr["function"]({_id}, {maker, ast.Stmt["return"]({setmt(tbl, callable, node)}, node)}, node)
-        return ast.Expr.call(lambda, {unique_str}, node)
-    end
-    local destruct = function(node)
-        local ret_call = function(params, body, args, loc)
-            return ast.Stmt["return"]({ast.Expr.call(ast.Expr["function"](params, body, loc), args, loc)}, loc)
-        end
-        local tests, blocks, n = {}, {}, 0
-        local els
-        local _nm = id("_nm", node)
-        for _, v in ipairs(node.variants) do
-            local all = ast.Expr.vararg(v.ctor)
-            local handler = visit_stmts(v.body)
-            if #v.params > 0 then
-                handler = {ret_call(v.params, handler, {all}, v.ctor)}
-            end
-            if v.ctor.name == "*" then
-                els = handler
-            else
-                n = n + 1
-                blocks[n] = handler
-                tests[n] = ast.Expr.binary("==", str(v.ctor.name, v.ctor), _nm, v.ctor)
-            end
-        end
-        local conds
-        if n > 0 then
-            conds = {ast.Stmt["if"](tests, blocks, els, node)}
-        elseif els then
-            conds = els
-        end
-        local lambda = ast.Expr["function"]({_nm, ast.Expr.vararg(node)}, conds, node)
-        local test = visit_expr(node.test)
-        local argm = visit_expr(node.arg)
-        return ast.Expr.call(lambda, {ast.Expr.call(test, {argm}, node)}, node)
     end
     Expr[TExpr.Id] = function(node)
         if node.name == "@" then
@@ -151,12 +83,6 @@ return function(stmts)
         end
         node.args = visit_exprs(node.args)
         return node
-    end
-    Expr[TExpr.Union] = function(node)
-        if node.test and node.arg then
-            return destruct(node)
-        end
-        return construct(node)
     end
     Expr[TExpr.Unary] = function(node)
         node.right = visit_expr(node.right)

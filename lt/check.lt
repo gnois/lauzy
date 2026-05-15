@@ -22,22 +22,22 @@ return \scope, stmts, warn, import, typecheck ->
 	var with_lvl = \delta, fn, ... ->
 		var prev = lvl
 		lvl = lvl + (delta or 0)
-		var out = fn(...)
+		var ok, out = pcall(fn, ...)
 		lvl = prev
+		if not ok
+			error(out, 0)
 		return out
 
 	var new = \level ->
 		return solv.fresh_var(level or lvl)
 
-	var fail = \node ->
-		var msg = (node.tag or 'nil') .. " cannot match a statement type"
-		if node.line and node.col
-			warn(node.line, node.col, 3, msg)
-		else
-			error(msg)
-
-	var describe_type = \t ->
-		return ty.tostr(solv.apply(t))
+	var fail = \node, node_type ->
+		if node
+			var msg = (node.tag or 'nil') .. " cannot match " .. node_type .. " type"
+			if node.line and node.col
+				warn(node.line, node.col, 3, msg)
+				return
+		error("node is nil or missing line and column info")
 
 	var maybe_self = \name ->
 		if name == '@'
@@ -73,7 +73,7 @@ return \scope, stmts, warn, import, typecheck ->
 		if typecheck
 			var ok, err = solv.constrain(actual, expected)
 			if not ok
-				var snapshot = " [" .. describe_type(actual) .. " <: " .. describe_type(expected) .. "]"
+				var snapshot = " [" .. ty.tostr(solv.apply(actual)) .. " <: " .. ty.tostr(solv.apply(expected)) .. "]"
 				warn(node.line, node.col, 1, msg .. err .. snapshot)
 			return ok and actual or false
 		return expected
@@ -127,15 +127,13 @@ return \scope, stmts, warn, import, typecheck ->
 				var vt = new()
 				tbl[#tbl + 1] = { vt, field }
 				return vt, t
-		return ty.any(), t
+		return new(), t
 
-	var expected_fn_type = \atypes ->
-		return ty.func(ty.tuple(atypes), ty.tuple_any())
 
 	var check_fn = \ftype, atypes, node, fname ->
 		if typecheck
 			var fn = solv.apply(ftype)
-			var expected = expected_fn_type(atypes)
+			var expected = ty.func(ty.tuple(atypes), ty.tuple({ty.varargs(new())}))
 			if fn.tag == TType.New
 				solv.extend(fn, expected)
 			--``
@@ -152,7 +150,7 @@ return \scope, stmts, warn, import, typecheck ->
 				check(expected, fn, node, fname_msg)
 				if fn.outs
 					return fn.outs
-		return ty.tuple_any()
+		return ty.tuple({ty.varargs(new())})
 
 
 	var check_stmts = \nodes ->
@@ -161,16 +159,21 @@ return \scope, stmts, warn, import, typecheck ->
 			if rule
 				rule(node)
 			else
-				fail(node)
+				fail(node, "statement")
 
 	var check_block = \nodes ->
 		scope.enter()
-		check_stmts(nodes)
+		var ok, err = pcall(check_stmts, nodes)
 		scope.leave()
+		if not ok
+			error(err, 0)
 
 	var infer_expr = \node ->
 		var rule = Expr[node.tag]
-		return rule(node)
+		if rule
+			return rule(node)
+		fail(node, "expression")
+		return new()
 
 	var infer_exprs = \nodes, start ->
 		var types, t = {}, 0
@@ -213,10 +216,10 @@ return \scope, stmts, warn, import, typecheck ->
 	Expr[TExpr.Vararg] = \node ->
 		if not scope.is_varargs()
 			warn(node.line, node.col, 2, "cannot use `...` in a function without variable arguments")
-		return ty.any_vars()
+		return ty.varargs(new())
 
 	Expr[TExpr.Id] = \node ->
-		var line, t
+		var line, t = nil, new()
 		if node.name  -- node.name can be nil, bcoz the parser continues despite error
 			var name = maybe_self(node.name)
 			line, t = scope.declared(name)
@@ -293,7 +296,7 @@ return \scope, stmts, warn, import, typecheck ->
 		-- if index is number, it can be float, so we cannot know
 		-- else index is its runtime value, so we cannot know
 		check(ty.tbl({}), ot, node, "indexer ")
-		return ty.any(), ot
+		return new(), ot
 
 	Expr[TExpr.Field] = \node ->
 		var ot = infer_expr(node.obj)
@@ -303,7 +306,7 @@ return \scope, stmts, warn, import, typecheck ->
 		var arg1 = node.args[1]
 		-- check imports
 		if arg1 and arg1.tag == TExpr.String and node.func.tag == TExpr.Id and node.func.name == 'require'
-				return import(arg1.value) or ty.any()
+				return import(arg1.value) or new()
 
 		var atypes
 		var func = node.func
@@ -335,7 +338,7 @@ return \scope, stmts, warn, import, typecheck ->
 
 		var op = node.op
 		if op == 'and'
-			return rtype
+			return ty.or(ltype, rtype)
 
 		if arithmetic(op) or relational(op)
 			-- skip equal and not equal, coz they can compare anything
@@ -356,10 +359,7 @@ return \scope, stmts, warn, import, typecheck ->
 			check_op(strnum, ltype, node, op, node.left, "left")
 			return ty.str()
 		-- op == 'or'
-		return ltype
-
-	Expr[TExpr.Union] = ->
-		return ty.any()
+		return ty.or(ltype, rtype)
 
 	--------- Statements --------------------
 	Stmt[TStmt.Expr] = \node ->

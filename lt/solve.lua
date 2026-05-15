@@ -478,15 +478,6 @@ return function()
         if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot then
             return false, "cannot constrain non-bottom to <bot>"
         end
-        if rhs.tag == TType.Any and lhs.tag ~= TType.Nil then
-            return true
-        end
-        if lhs.tag == TType.Any then
-            if rhs.tag == TType.Any then
-                return true
-            end
-            return false, "is <any> instead of " .. describe(rhs)
-        end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)
             if level_of(rhs) <= lhsv.level then

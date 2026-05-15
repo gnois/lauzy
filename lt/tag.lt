@@ -29,14 +29,12 @@ return {
 		, Field = 'Field'
 		, Invoke = 'Invoke'
 		, Call = 'Call'
-		, Union = 'Union'
 		, Unary = 'Unary'
 		, Binary = 'Binary'
 	}
 
 	, Type = {
 		New = 'New' -- TypeVar in MLstruct
-		, Any = 'Any'
 		, Nil = 'Nil'
 		, Val = 'Val'
 		, Tuple = 'Tuple'

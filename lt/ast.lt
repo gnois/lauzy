@@ -91,11 +91,6 @@ var Expression = {
 	, call = \func, args, ls ->
 		return make(TExpr.Call, {func = func, args = args}, ls)
 
-	--`` no more tagged union
-	, union = \variants, test, argm, ls ->
-		return make(TExpr.Union, {variants = variants, test = test, arg = argm}, ls)
-	--``
-
 	, unary = \op, right, ls ->
 		return make(TExpr.Unary, {op = op, right = right}, ls)
 

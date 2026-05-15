@@ -111,9 +111,7 @@ var flatten_type = \tag, types ->
 
 -- table needed, coz some function names are keywords
 var Type = {
-	any = ->
-		return create(TType.Any, {})
-	, nil = ->
+	nil = ->
 		return create(TType.Nil, {})
 	, num = ->
 		return create(TType.Val, {type = "num"})
@@ -172,8 +170,6 @@ tostr = \t ->
 -- build switch table only once
 Str[TType.New] = \t ->
 	return "T" .. t.id
-Str[TType.Any] = ->
-	return "<any>"
 Str[TType.Nil] = ->
 	return "<nil>"
 Str[TType.Val] = \t ->
@@ -213,24 +209,18 @@ Str[TType.And] = \t ->
 		list[i] = render(x, Prec[TType.And])
 	return table.concat(list, '&')
 -- shortcut
-var any_t = Type.any()
 var nil_t = Type.nil()
 var num_t = Type.num()
 var str_t = Type.str()
 var bool_t = Type.bool()
-var any_vars_t = varargs(any_t)
 var tuple_none_t = Type.tuple({})
-var tuple_any_t = Type.tuple({any_vars_t})
 
 return {
-	any = -> return any_t
-	, nil = -> return nil_t
+	nil = -> return nil_t
 	, num = -> return num_t
 	, str = -> return str_t
 	, bool = -> return bool_t
-	, any_vars = -> return any_vars_t
 	, tuple_none = -> return tuple_none_t
-	, tuple_any = -> return tuple_any_t
 	, tuple = Type.tuple
 	, func = Type.func
 	, tbl = Type.tbl
@@ -251,7 +241,6 @@ return {
 $ string
 ! bool
 . vararg <- perhaps not needed
-* any, but not nil
 [:] type tuple to type tuple - function
 {:} type to type - table
 {} array
