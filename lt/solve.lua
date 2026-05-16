@@ -42,15 +42,7 @@ return function()
         list[#list + 1] = t
         return true
     end
-    local maybe_varargs = function(src, dst)
-        if src and src.varargs then
-            dst.varargs = true
-        end
-        return dst
-    end
-    local apply
     local coalesce
-    local describe
     coalesce = function(node, pol, seen)
         pol = pol ~= false
         seen = seen or {}
@@ -79,31 +71,31 @@ return function()
                 end
             end
             seen[mark] = nil
-            return maybe_varargs(node, out)
+            return ty.keep_varargs(node, out)
         end
         if node.tag == TType.Func then
-            return maybe_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen), outs = coalesce(node.outs, pol, seen)})
+            return ty.keep_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen), outs = coalesce(node.outs, pol, seen)})
         end
         if node.tag == TType.Tuple then
             local out = {}
             for i, v in ipairs(node) do
                 out[i] = coalesce(v, pol, seen)
             end
-            return maybe_varargs(node, ty.tuple(out))
+            return ty.keep_varargs(node, ty.tuple(out))
         end
         if node.tag == TType.Or then
             local out = {}
             for i, v in ipairs(node) do
                 out[i] = coalesce(v, pol, seen)
             end
-            return maybe_varargs(node, ty["or"](unpack(out)))
+            return ty.keep_varargs(node, ty["or"](unpack(out)))
         end
         if node.tag == TType.And then
             local out = {}
             for i, v in ipairs(node) do
                 out[i] = coalesce(v, pol, seen)
             end
-            return maybe_varargs(node, ty["and"](unpack(out)))
+            return ty.keep_varargs(node, ty["and"](unpack(out)))
         end
         if node.tag == TType.Tbl then
             local out = {}
@@ -114,15 +106,21 @@ return function()
                 end
                 out[i] = {coalesce(tk[1], pol, seen), key}
             end
-            return maybe_varargs(node, ty.tbl(out))
+            return ty.keep_varargs(node, ty.tbl(out))
         end
         return node
     end
-    describe = function(node)
-        if not node then
-            return "<nil>"
+    local simplify = function(node, pol)
+        if node then
+            return ty.simplify(coalesce(node, pol ~= false, {}), {})
         end
-        return ty.tostr(coalesce(node, true, {}))
+        return node
+    end
+    local describe = function(node)
+        if node then
+            return ty.tostr(simplify(node, true))
+        end
+        return "nil"
     end
     local subst
     subst = function(node, tvar, texp)
@@ -155,6 +153,7 @@ return function()
         end
         return node
     end
+    local apply
     apply = function(node)
         if not node or "table" ~= type(node) then
             return node
@@ -221,7 +220,7 @@ return function()
     end
     local extend = function(tvar, texp, ignore)
         if not tvar or tvar.tag ~= TType.New then
-            return false, ignore and "" or "cannot extend non-typevar " .. (tvar and ty.tostr(tvar) or "<nil>")
+            return false, ignore and "" or "cannot extend non-typevar " .. (tvar and ty.tostr(tvar) or "nil")
         end
         ensure_var(tvar)
         if occurs(tvar, texp) then
@@ -387,17 +386,17 @@ return function()
                     nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache)
                 end
             end
-            return maybe_varargs(node, nv)
+            return ty.keep_varargs(node, nv)
         end
         if node.tag == TType.Func then
-            return maybe_varargs(node, {tag = TType.Func, ins = extrude(node.ins, not pol, lim, cache), outs = extrude(node.outs, pol, lim, cache)})
+            return ty.keep_varargs(node, {tag = TType.Func, ins = extrude(node.ins, not pol, lim, cache), outs = extrude(node.outs, pol, lim, cache)})
         end
         if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
             local out = {}
             for i, v in ipairs(node) do
                 out[i] = extrude(v, pol, lim, cache)
             end
-            return maybe_varargs(node, {tag = node.tag, unpack(out)})
+            return ty.keep_varargs(node, {tag = node.tag, unpack(out)})
         end
         if node.tag == TType.Tbl then
             local out = {}
@@ -408,7 +407,7 @@ return function()
                 end
                 out[i] = {extrude(tk[1], pol, lim, cache), key}
             end
-            return maybe_varargs(node, ty.tbl(out))
+            return ty.keep_varargs(node, ty.tbl(out))
         end
         return node
     end
@@ -436,24 +435,24 @@ return function()
                 for _, b in ipairs(node.sup) do
                     fv.sup[#fv.sup + 1] = rec(b)
                 end
-                return maybe_varargs(node, fv)
+                return ty.keep_varargs(node, fv)
             end
             if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
                 local out = {}
                 for i, v in ipairs(node) do
                     out[i] = rec(v)
                 end
-                return maybe_varargs(node, {tag = node.tag, unpack(out)})
+                return ty.keep_varargs(node, {tag = node.tag, unpack(out)})
             end
             if node.tag == TType.Func then
-                return maybe_varargs(node, {tag = TType.Func, ins = rec(node.ins), outs = rec(node.outs)})
+                return ty.keep_varargs(node, {tag = TType.Func, ins = rec(node.ins), outs = rec(node.outs)})
             end
             if node.tag == TType.Tbl then
                 local out = {}
                 for i, tk in ipairs(node) do
                     out[i] = {rec(tk[1]), tk[2] and rec(tk[2]) or tk[2]}
                 end
-                return maybe_varargs(node, ty.tbl(out))
+                return ty.keep_varargs(node, ty.tbl(out))
             end
             return node
         end
@@ -473,10 +472,10 @@ return function()
             return true
         end
         if lhs.tag == TType.Top and rhs.tag ~= TType.Top then
-            return false, "cannot constrain <top> to narrower type"
+            return false, "cannot constrain <Top> to narrower type"
         end
         if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot then
-            return false, "cannot constrain non-bottom to <bot>"
+            return false, "cannot constrain non-bottom to <Bot>"
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)
@@ -558,7 +557,7 @@ return function()
                 if not ok then
                     return false, err
                 end
-                ok, err = constrain_tuple(lhs_outs, rhs_outs, false, cache)
+                ok, err = constrain(lhs_outs, rhs_outs, cache)
                 if not ok then
                     return false, err
                 end
@@ -587,6 +586,7 @@ return function()
         , fresh_var = fresh_var
         , instantiate = instantiate
         , describe = describe
+        , simplify = simplify
         , extend = extend
         , constrain = constrain
     }

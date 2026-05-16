@@ -85,7 +85,19 @@ var create = \tag, node ->
 var new_var = \id, level, sub, sup ->
 	return create(TType.New, {id = id, level = level or 0, sub = sub or {}, sup = sup or {}})
 
-var flatten_type = \tag, types ->
+var dedup = \list ->
+	var out = {}
+	for _, t in ipairs(list)
+		var dup = false
+		for __, v in ipairs(out)
+			if t == v or same(t, v)
+				dup = true
+				break
+		if not dup
+			out[#out + 1] = t
+	return out
+
+var flatten = \tag, types ->
 	var list, l = {}, 0
 	for _, t in ipairs(types)
 		if t.tag == tag
@@ -96,18 +108,13 @@ var flatten_type = \tag, types ->
 			l = l + 1
 			list[l] = t
 	if l > 1
-		var out, o = {}, 0
-		for _, t in ipairs(list)
-			var dup = false
-			for __, v in ipairs(out)
-				if same(t, v)
-					dup = true
-					break
-			if not dup
-				o = o + 1
-				out[o] = t
-		return out
+		return dedup(list)
 	return list
+
+var keep_varargs = \src, dst ->
+	if src and src.varargs
+		dst.varargs = true
+	return dst
 
 -- table needed, coz some function names are keywords
 var Type = {
@@ -131,9 +138,9 @@ var Type = {
 	, tbl = \typetypes ->
 		return create(TType.Tbl, typetypes)
 	, or = \... ->
-		return create(TType.Or, flatten_type(TType.Or, {...}))
+		return create(TType.Or, flatten(TType.Or, {...}))
 	, and = \... ->
-		return create(TType.And, flatten_type(TType.And, {...}))
+		return create(TType.And, flatten(TType.And, {...}))
 	, new_var = new_var
 }
 
@@ -141,6 +148,57 @@ var varargs = \t ->
 	assert(TType[t.tag])  -- must be type node
 	t.varargs = true
 	return t
+
+var simplify
+simplify = \node, seen ->
+	seen = seen or {}
+	if not node or "table" ~= type(node)
+		return node
+	if seen[node]
+		return node
+	seen[node] = true
+
+	if node.tag == TType.Or or node.tag == TType.And
+		var flat = {}
+		for _, v in ipairs(node)
+			var sv = simplify(v, seen)
+			if sv and sv.tag == node.tag
+				for __, vv in ipairs(sv)
+					flat[#flat + 1] = vv
+			else
+				flat[#flat + 1] = sv
+		flat = dedup(flat)
+		if #flat == 0
+			return node
+		if #flat == 1
+			return flat[1]
+		if node.tag == TType.Or
+			return keep_varargs(node, Type.or(unpack(flat)))
+		return keep_varargs(node, Type.and(unpack(flat)))
+
+	if node.tag == TType.Tuple
+		var out = {}
+		for i, v in ipairs(node)
+			out[i] = simplify(v, seen)
+		return keep_varargs(node, Type.tuple(out))
+
+	if node.tag == TType.Func
+		return keep_varargs(node, {
+			tag = TType.Func
+			, ins = simplify(node.ins, seen)
+			, outs = simplify(node.outs, seen)
+		})
+
+	if node.tag == TType.Tbl
+		var out = {}
+		for i, tk in ipairs(node)
+			var key = tk[2]
+			if "table" == type(key)
+				key = simplify(key, seen)
+			out[i] = { simplify(tk[1], seen), key }
+		return keep_varargs(node, Type.tbl(out))
+
+	return node
 
 
 ----------------- type to string ------------------
@@ -171,9 +229,9 @@ tostr = \t ->
 Str[TType.New] = \t ->
 	return "T" .. t.id
 Str[TType.Nil] = ->
-	return "<nil>"
+	return "nil"
 Str[TType.Val] = \t ->
-	return '<' .. t.type .. '>'
+	return t.type
 Str[TType.Tuple] = \t ->
 	var out = {}
 	for i, v in ipairs(t)
@@ -231,6 +289,8 @@ return {
 	, same = same
 	, clone = clone
 	, get_tbl = get_tbl
+	, keep_varargs = keep_varargs
+	, simplify = simplify
 	, tostr = tostr
 }
 

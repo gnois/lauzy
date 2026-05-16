@@ -73,7 +73,7 @@ return \scope, stmts, warn, import, typecheck ->
 		if typecheck
 			var ok, err = solv.constrain(actual, expected)
 			if not ok
-				var snapshot = " [" .. ty.tostr(solv.apply(actual)) .. " <: " .. ty.tostr(solv.apply(expected)) .. "]"
+				var snapshot = " => " .. solv.describe(actual) .. " <: " .. solv.describe(expected)
 				warn(node.line, node.col, 1, msg .. err .. snapshot)
 			return ok and actual or false
 		return expected
@@ -343,13 +343,13 @@ return \scope, stmts, warn, import, typecheck ->
 		if arithmetic(op) or relational(op)
 			-- skip equal and not equal, coz they can compare anything
 			if op ~= '==' and op ~= '~='
-				-- symmetric check
 				if arithmetic(op)
 					check_op(ty.num(), ltype, node, op, node.left, "left")
 					check_op(ty.num(), rtype, node, op, node.right, "right")
 				else
-					check_op(ltype, rtype, node, op, node.right, "right")
-					check_op(rtype, ltype, node, op, node.left, "left")
+					var ordered = ty.or(ty.num(), ty.str())
+					check_op(ordered, ltype, node, op, node.left, "left")
+					check_op(ordered, rtype, node, op, node.right, "right")
 			if relational(op)
 				return ty.bool()
 		else if op == '..'
@@ -497,7 +497,7 @@ return \scope, stmts, warn, import, typecheck ->
 	scope.end_func()
 	-- lua require() can only return single value
 	if rtuple and rtuple[1]
-		return solv.apply(rtuple[1])
+		return solv.simplify(rtuple[1])
 	return ty.nil()
 
 

@@ -80,7 +80,7 @@ return function(scope, stmts, warn, import, typecheck)
         if typecheck then
             local ok, err = solv.constrain(actual, expected)
             if not ok then
-                local snapshot = " [" .. ty.tostr(solv.apply(actual)) .. " <: " .. ty.tostr(solv.apply(expected)) .. "]"
+                local snapshot = " => " .. solv.describe(actual) .. " <: " .. solv.describe(expected)
                 warn(node.line, node.col, 1, msg .. err .. snapshot)
             end
             return ok and actual or false
@@ -375,8 +375,9 @@ return function(scope, stmts, warn, import, typecheck)
                     check_op(ty.num(), ltype, node, op, node.left, "left")
                     check_op(ty.num(), rtype, node, op, node.right, "right")
                 else
-                    check_op(ltype, rtype, node, op, node.right, "right")
-                    check_op(rtype, ltype, node, op, node.left, "left")
+                    local ordered = ty["or"](ty.num(), ty.str())
+                    check_op(ordered, ltype, node, op, node.left, "left")
+                    check_op(ordered, rtype, node, op, node.right, "right")
                 end
             end
             if relational(op) then
@@ -527,7 +528,7 @@ return function(scope, stmts, warn, import, typecheck)
     local rtuple = scope.get_returns()
     scope.end_func()
     if rtuple and rtuple[1] then
-        return solv.apply(rtuple[1])
+        return solv.simplify(rtuple[1])
     end
     return ty["nil"]()
 end

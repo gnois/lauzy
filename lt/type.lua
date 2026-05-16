@@ -97,7 +97,23 @@ end
 local new_var = function(id, level, sub, sup)
     return create(TType.New, {id = id, level = level or 0, sub = sub or {}, sup = sup or {}})
 end
-local flatten_type = function(tag, types)
+local dedup = function(list)
+    local out = {}
+    for _, t in ipairs(list) do
+        local dup = false
+        for __, v in ipairs(out) do
+            if t == v or same(t, v) then
+                dup = true
+                break
+            end
+        end
+        if not dup then
+            out[#out + 1] = t
+        end
+    end
+    return out
+end
+local flatten = function(tag, types)
     local list, l = {}, 0
     for _, t in ipairs(types) do
         if t.tag == tag then
@@ -111,23 +127,15 @@ local flatten_type = function(tag, types)
         end
     end
     if l > 1 then
-        local out, o = {}, 0
-        for _, t in ipairs(list) do
-            local dup = false
-            for __, v in ipairs(out) do
-                if same(t, v) then
-                    dup = true
-                    break
-                end
-            end
-            if not dup then
-                o = o + 1
-                out[o] = t
-            end
-        end
-        return out
+        return dedup(list)
     end
     return list
+end
+local keep_varargs = function(src, dst)
+    if src and src.varargs then
+        dst.varargs = true
+    end
+    return dst
 end
 local Type = {
     ["nil"] = function()
@@ -152,10 +160,10 @@ local Type = {
         return create(TType.Tbl, typetypes)
     end
     , ["or"] = function(...)
-        return create(TType.Or, flatten_type(TType.Or, {...}))
+        return create(TType.Or, flatten(TType.Or, {...}))
     end
     , ["and"] = function(...)
-        return create(TType.And, flatten_type(TType.And, {...}))
+        return create(TType.And, flatten(TType.And, {...}))
     end
     , new_var = new_var
 }
@@ -163,6 +171,63 @@ local varargs = function(t)
     assert(TType[t.tag])
     t.varargs = true
     return t
+end
+local simplify
+simplify = function(node, seen)
+    seen = seen or {}
+    if not node or "table" ~= type(node) then
+        return node
+    end
+    if seen[node] then
+        return node
+    end
+    seen[node] = true
+    if node.tag == TType.Or or node.tag == TType.And then
+        local flat = {}
+        for _, v in ipairs(node) do
+            local sv = simplify(v, seen)
+            if sv and sv.tag == node.tag then
+                for __, vv in ipairs(sv) do
+                    flat[#flat + 1] = vv
+                end
+            else
+                flat[#flat + 1] = sv
+            end
+        end
+        flat = dedup(flat)
+        if #flat == 0 then
+            return node
+        end
+        if #flat == 1 then
+            return flat[1]
+        end
+        if node.tag == TType.Or then
+            return keep_varargs(node, Type["or"](unpack(flat)))
+        end
+        return keep_varargs(node, Type["and"](unpack(flat)))
+    end
+    if node.tag == TType.Tuple then
+        local out = {}
+        for i, v in ipairs(node) do
+            out[i] = simplify(v, seen)
+        end
+        return keep_varargs(node, Type.tuple(out))
+    end
+    if node.tag == TType.Func then
+        return keep_varargs(node, {tag = TType.Func, ins = simplify(node.ins, seen), outs = simplify(node.outs, seen)})
+    end
+    if node.tag == TType.Tbl then
+        local out = {}
+        for i, tk in ipairs(node) do
+            local key = tk[2]
+            if "table" == type(key) then
+                key = simplify(key, seen)
+            end
+            out[i] = {simplify(tk[1], seen), key}
+        end
+        return keep_varargs(node, Type.tbl(out))
+    end
+    return node
 end
 local Str = {}
 local Prec = {[TType.Or] = 1, [TType.And] = 2, [TType.Func] = 0}
@@ -188,10 +253,10 @@ Str[TType.New] = function(t)
     return "T" .. t.id
 end
 Str[TType.Nil] = function()
-    return "<nil>"
+    return "nil"
 end
 Str[TType.Val] = function(t)
-    return "<" .. t.type .. ">"
+    return t.type
 end
 Str[TType.Tuple] = function(t)
     local out = {}
@@ -270,5 +335,7 @@ return {
     , same = same
     , clone = clone
     , get_tbl = get_tbl
+    , keep_varargs = keep_varargs
+    , simplify = simplify
     , tostr = tostr
 }

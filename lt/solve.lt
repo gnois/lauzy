@@ -36,15 +36,8 @@ return ->
 		list[#list + 1] = t
 		return true
 
-	var maybe_varargs = \src, dst ->
-		if src and src.varargs
-			dst.varargs = true
-		return dst
 
-	var apply
 	var coalesce
-	var describe
-
 	coalesce = \node, pol, seen ->
 		pol = pol ~= false
 		seen = seen or {}
@@ -69,10 +62,10 @@ return ->
 				else
 					out = ty.and(out, c)
 			seen[mark] = nil
-			return maybe_varargs(node, out)
+			return ty.keep_varargs(node, out)
 
 		if node.tag == TType.Func
-			return maybe_varargs(node, {
+			return ty.keep_varargs(node, {
 				tag = TType.Func
 				, ins = coalesce(node.ins, not pol, seen)
 				, outs = coalesce(node.outs, pol, seen)
@@ -82,19 +75,19 @@ return ->
 			var out = {}
 			for i, v in ipairs(node)
 				out[i] = coalesce(v, pol, seen)
-			return maybe_varargs(node, ty.tuple(out))
+			return ty.keep_varargs(node, ty.tuple(out))
 
 		if node.tag == TType.Or
 			var out = {}
 			for i, v in ipairs(node)
 				out[i] = coalesce(v, pol, seen)
-			return maybe_varargs(node, ty.or(unpack(out)))
+			return ty.keep_varargs(node, ty.or(unpack(out)))
 
 		if node.tag == TType.And
 			var out = {}
 			for i, v in ipairs(node)
 				out[i] = coalesce(v, pol, seen)
-			return maybe_varargs(node, ty.and(unpack(out)))
+			return ty.keep_varargs(node, ty.and(unpack(out)))
 
 		if node.tag == TType.Tbl
 			var out = {}
@@ -103,14 +96,19 @@ return ->
 				if "table" == type(key)
 					key = coalesce(key, pol, seen)
 				out[i] = { coalesce(tk[1], pol, seen), key }
-			return maybe_varargs(node, ty.tbl(out))
+			return ty.keep_varargs(node, ty.tbl(out))
 
 		return node
 
-	describe = \node ->
-		if not node
-			return "<nil>"
-		return ty.tostr(coalesce(node, true, {}))
+	var simplify = \node, pol ->
+		if node
+			return ty.simplify(coalesce(node, pol ~= false, {}), {})
+		return node
+
+	var describe = \node ->
+		if node
+			return ty.tostr(simplify(node, true))
+		return "nil"
 
 	------ subst in place --------------
 	var subst
@@ -138,6 +136,7 @@ return ->
 
 
 	------ apply in place --------------
+	var apply
 	apply = \node ->
 		if not node or "table" ~= type(node)
 			return node
@@ -189,7 +188,7 @@ return ->
 
 	var extend = \tvar, texp, ignore ->
 		if not tvar or tvar.tag ~= TType.New
-			return false, ignore and "" or ("cannot extend non-typevar " .. (tvar and ty.tostr(tvar) or "<nil>"))
+			return false, ignore and "" or ("cannot extend non-typevar " .. (tvar and ty.tostr(tvar) or "nil"))
 		ensure_var(tvar)
 		if occurs(tvar, texp)
 			return false, ignore and "" or ("contains recursive type " .. ty.tostr(tvar) .. " in " .. ty.tostr(texp))
@@ -323,9 +322,9 @@ return ->
 				push_unique(node.sub, nv)
 				for _, b in ipairs(node.sup)
 					nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache)
-			return maybe_varargs(node, nv)
+			return ty.keep_varargs(node, nv)
 		if node.tag == TType.Func
-			return maybe_varargs(node, {
+			return ty.keep_varargs(node, {
 				tag = TType.Func
 				, ins = extrude(node.ins, not pol, lim, cache)
 				, outs = extrude(node.outs, pol, lim, cache)
@@ -334,7 +333,7 @@ return ->
 			var out = {}
 			for i, v in ipairs(node)
 				out[i] = extrude(v, pol, lim, cache)
-			return maybe_varargs(node, { tag = node.tag, unpack(out) })
+			return ty.keep_varargs(node, { tag = node.tag, unpack(out) })
 		if node.tag == TType.Tbl
 			var out = {}
 			for i, tk in ipairs(node)
@@ -342,7 +341,7 @@ return ->
 				if "table" == type(key)
 					key = extrude(key, pol, lim, cache)
 				out[i] = { extrude(tk[1], pol, lim, cache), key }
-			return maybe_varargs(node, ty.tbl(out))
+			return ty.keep_varargs(node, ty.tbl(out))
 		return node
 
 	var instantiate = \tyexp, lim, to_lvl ->
@@ -366,14 +365,14 @@ return ->
 					fv.sub[#fv.sub + 1] = rec(b)
 				for _, b in ipairs(node.sup)
 					fv.sup[#fv.sup + 1] = rec(b)
-				return maybe_varargs(node, fv)
+				return ty.keep_varargs(node, fv)
 			if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
 				var out = {}
 				for i, v in ipairs(node)
 					out[i] = rec(v)
-				return maybe_varargs(node, { tag = node.tag, unpack(out) })
+				return ty.keep_varargs(node, { tag = node.tag, unpack(out) })
 			if node.tag == TType.Func
-				return maybe_varargs(node, {
+				return ty.keep_varargs(node, {
 					tag = TType.Func
 					, ins = rec(node.ins)
 					, outs = rec(node.outs)
@@ -382,7 +381,7 @@ return ->
 				var out = {}
 				for i, tk in ipairs(node)
 					out[i] = { rec(tk[1]), tk[2] and rec(tk[2]) or tk[2] }
-				return maybe_varargs(node, ty.tbl(out))
+				return ty.keep_varargs(node, ty.tbl(out))
 			return node
 
 		return rec(tyexp)
@@ -402,10 +401,10 @@ return ->
 			return true
 
 		if lhs.tag == TType.Top and rhs.tag ~= TType.Top
-			return false, "cannot constrain <top> to narrower type"
+			return false, "cannot constrain <Top> to narrower type"
 
 		if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot
-			return false, "cannot constrain non-bottom to <bot>"
+			return false, "cannot constrain non-bottom to <Bot>"
 
 		if lhs.tag == TType.New
 			var lhsv = ensure_var(lhs)
@@ -472,7 +471,7 @@ return ->
 				var ok, err = constrain_tuple(lhs.ins, rhs.ins, true, cache)
 				if not ok
 					return false, err
-				ok, err = constrain_tuple(lhs_outs, rhs_outs, false, cache)
+				ok, err = constrain(lhs_outs, rhs_outs, cache)
 				if not ok
 					return false, err
 				return true
@@ -494,6 +493,7 @@ return ->
 		, fresh_var = fresh_var
 		, instantiate = instantiate
 		, describe = describe
+		, simplify = simplify
 		, extend = extend
 		, constrain = constrain
 	}
