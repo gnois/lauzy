@@ -73,7 +73,12 @@ return \scope, stmts, warn, import, typecheck ->
 		if typecheck
 			var ok, err = solv.constrain(actual, expected)
 			if not ok
-				var snapshot = " => " .. solv.describe(actual) .. " <: " .. solv.describe(expected)
+				var act = solv.describe(actual)
+				var exp = solv.describe(expected)
+				var eup = solv.describe(expected, false)
+				var snapshot = " => " .. act .. " <: " .. exp
+				if eup ~= exp
+					snapshot = snapshot .. "  (upper: " .. eup .. ")"
 				warn(node.line, node.col, 1, msg .. err .. snapshot)
 			return ok and actual or false
 		return expected
@@ -129,6 +134,54 @@ return \scope, stmts, warn, import, typecheck ->
 				return vt, t
 		return new(), t
 
+	var check_args = \ins, atypes, node, fname ->
+		var params = ins or ty.tuple_none()
+		var pn = #params
+		var an = #atypes
+		var pvar = nil
+		if pn > 0 and params[pn] and params[pn].varargs
+			pvar = params[pn]
+
+		var arity_shape = \types, n, has_varargs ->
+			if has_varargs
+				return "at least " .. (n - 1)
+			return tostring(n)
+
+		var expected_arity = arity_shape(params, pn, pvar ~= nil)
+		var avar = an > 0 and atypes[an] and atypes[an].varargs
+		var actual_arity = arity_shape(atypes, an, avar)
+
+		var arity_msg = \ ->
+			var who = ""
+			if fname
+				who = "`" .. fname .. "` "
+			var expected_tuple = ty.tostr(params)
+			var actual_tuple = ty.tostr(ty.tuple(atypes))
+			return who .. "expects " .. expected_arity .. " arguments " .. expected_tuple .. ", got " .. actual_arity .. " " .. actual_tuple
+
+		for i = 1, an
+			var actual = atypes[i]
+			var expected = params[i]
+			if not expected
+				if pvar
+					expected = pvar
+				else
+					if actual and actual.varargs
+						return true
+					warn(node.line, node.col, 1, arity_msg())
+					return false
+			if not check(expected, actual, node, "argument " .. i .. " ")
+				return false
+
+		for i = an + 1, pn
+			var expected = params[i]
+			if expected and not expected.varargs
+				warn(node.line, node.col, 1, arity_msg())
+				return false
+			if expected and expected.varargs
+				break
+		return true
+
 
 	var check_fn = \ftype, atypes, node, fname ->
 		if typecheck
@@ -136,6 +189,10 @@ return \scope, stmts, warn, import, typecheck ->
 			var expected = ty.func(ty.tuple(atypes), ty.tuple({ty.varargs(new())}))
 			if fn.tag == TType.New
 				solv.extend(fn, expected)
+			else if fn.tag == TType.Func
+				check_args(fn.ins, atypes, node, fname)
+				if fn.outs
+					return fn.outs
 			--``
 			else if fn.tag == TType.Nil or fn.tag == TType.Val
 				var fname_msg = ""

@@ -116,9 +116,9 @@ return function()
         end
         return node
     end
-    local describe = function(node)
+    local describe = function(node, pol)
         if node then
-            return ty.tostr(simplify(node, true))
+            return ty.tostr(simplify(node, pol ~= false))
         end
         return "nil"
     end
@@ -265,31 +265,61 @@ return function()
         return describe(key)
     end
     local constrain
+    local tuple_shape = function(t)
+        local n = #t
+        if n > 0 and t[n] and t[n].varargs then
+            return "at least " .. n - 1
+        end
+        return tostring(n)
+    end
+    local tuple_render = function(t)
+        return describe(ty.tuple(t))
+    end
     local constrain_tuple = function(lhs, rhs, contra, cache)
-        local i, n = 0, #lhs
+        local ln, rn = #lhs, #rhs
+        local ltail = ln > 0 and lhs[ln] and lhs[ln].varargs and lhs[ln] or nil
+        local rtail = rn > 0 and rhs[rn] and rhs[rn].varargs and rhs[rn] or nil
+        local mismatch = "tuple arity mismatch: expected " .. tuple_shape(rhs) .. " " .. tuple_render(rhs) .. ", got " .. tuple_shape(lhs) .. " " .. tuple_render(lhs)
+        local i, n = 0, ln > rn and ln or rn
         while i < n do
             i = i + 1
-            if rhs[i] then
-                local ok, err
+            local l = lhs[i]
+            local r = rhs[i]
+            if not l then
+                if not r then
+                    break
+                end
                 if contra then
-                    ok, err = constrain(rhs[i], lhs[i], cache)
+                    if not ltail then
+                        return false, mismatch
+                    end
+                    l = ltail
                 else
-                    ok, err = constrain(lhs[i], rhs[i], cache)
+                    if r.varargs and i == rn then
+                        return true
+                    end
+                    return false, mismatch
                 end
-                if not ok then
-                    return false, err
+            elseif not r then
+                if contra then
+                    if l.varargs and i == ln then
+                        return true
+                    end
+                    return false, mismatch
                 end
-            else
-                if not lhs[i].varargs then
-                    return false, "tuple arity mismatch"
+                if not rtail then
+                    return false, mismatch
                 end
-                return true
+                r = rtail
             end
-        end
-        if i < #rhs then
-            i = i + 1
-            if not rhs[i].varargs then
-                return false, "tuple arity mismatch"
+            local ok, err
+            if contra then
+                ok, err = constrain(r, l, cache)
+            else
+                ok, err = constrain(l, r, cache)
+            end
+            if not ok then
+                return false, err
             end
         end
         return true
@@ -503,13 +533,26 @@ return function()
             return true
         end
         if rhs.tag == TType.Or then
+            local last_err = "cannot match any part of union"
             for _, t in ipairs(rhs) do
-                local ok = constrain(lhs, t, cache)
-                if ok then
-                    return true
+                if t.tag ~= TType.New then
+                    local ok, err = constrain(lhs, t, cache)
+                    if ok then
+                        return true
+                    end
+                    last_err = err or last_err
                 end
             end
-            return false, "cannot match any part of union"
+            for _, t in ipairs(rhs) do
+                if t.tag == TType.New then
+                    local ok, err = constrain(lhs, t, cache)
+                    if ok then
+                        return true
+                    end
+                    last_err = err or last_err
+                end
+            end
+            return false, last_err
         end
         if lhs.tag == TType.And then
             local last_err = "cannot constrain intersection"
@@ -548,7 +591,7 @@ return function()
                 if lhs.type == rhs.type then
                     return true
                 end
-                return false, "primitive mismatch: " .. describe(lhs) .. " vs " .. describe(rhs)
+                return false, "expected " .. describe(rhs) .. ", got " .. describe(lhs)
             end
             if lhs.tag == TType.Func then
                 local lhs_outs = lhs.outs or ty.tuple_none()
@@ -579,7 +622,7 @@ return function()
                 return true
             end
         end
-        return false, "may be " .. describe(lhs) .. " instead of " .. describe(rhs)
+        return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
     end
     return {
         apply = apply

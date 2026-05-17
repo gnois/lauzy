@@ -80,7 +80,13 @@ return function(scope, stmts, warn, import, typecheck)
         if typecheck then
             local ok, err = solv.constrain(actual, expected)
             if not ok then
-                local snapshot = " => " .. solv.describe(actual) .. " <: " .. solv.describe(expected)
+                local act = solv.describe(actual)
+                local exp = solv.describe(expected)
+                local eup = solv.describe(expected, false)
+                local snapshot = " => " .. act .. " <: " .. exp
+                if eup ~= exp then
+                    snapshot = snapshot .. "  (upper: " .. eup .. ")"
+                end
                 warn(node.line, node.col, 1, msg .. err .. snapshot)
             end
             return ok and actual or false
@@ -149,12 +155,73 @@ return function(scope, stmts, warn, import, typecheck)
         end
         return new(), t
     end
+    local check_args = function(ins, atypes, node, fname)
+        local params = ins or ty.tuple_none()
+        local pn = #params
+        local an = #atypes
+        local pvar = nil
+        if pn > 0 and params[pn] and params[pn].varargs then
+            pvar = params[pn]
+        end
+        local arity_shape = function(types, n, has_varargs)
+            if has_varargs then
+                return "at least " .. n - 1
+            end
+            return tostring(n)
+        end
+        local expected_arity = arity_shape(params, pn, pvar ~= nil)
+        local avar = an > 0 and atypes[an] and atypes[an].varargs
+        local actual_arity = arity_shape(atypes, an, avar)
+        local arity_msg = function()
+            local who = ""
+            if fname then
+                who = "`" .. fname .. "` "
+            end
+            local expected_tuple = ty.tostr(params)
+            local actual_tuple = ty.tostr(ty.tuple(atypes))
+            return who .. "expects " .. expected_arity .. " arguments " .. expected_tuple .. ", got " .. actual_arity .. " " .. actual_tuple
+        end
+        for i = 1, an do
+            local actual = atypes[i]
+            local expected = params[i]
+            if not expected then
+                if pvar then
+                    expected = pvar
+                else
+                    if actual and actual.varargs then
+                        return true
+                    end
+                    warn(node.line, node.col, 1, arity_msg())
+                    return false
+                end
+            end
+            if not check(expected, actual, node, "argument " .. i .. " ") then
+                return false
+            end
+        end
+        for i = an + 1, pn do
+            local expected = params[i]
+            if expected and not expected.varargs then
+                warn(node.line, node.col, 1, arity_msg())
+                return false
+            end
+            if expected and expected.varargs then
+                break
+            end
+        end
+        return true
+    end
     local check_fn = function(ftype, atypes, node, fname)
         if typecheck then
             local fn = solv.apply(ftype)
             local expected = ty.func(ty.tuple(atypes), ty.tuple({ty.varargs(new())}))
             if fn.tag == TType.New then
                 solv.extend(fn, expected)
+            elseif fn.tag == TType.Func then
+                check_args(fn.ins, atypes, node, fname)
+                if fn.outs then
+                    return fn.outs
+                end
             else
                 local fname_msg = ""
                 if fname then

@@ -105,9 +105,9 @@ return ->
 			return ty.simplify(coalesce(node, pol ~= false, {}), {})
 		return node
 
-	var describe = \node ->
+	var describe = \node, pol ->
 		if node
-			return ty.tostr(simplify(node, true))
+			return ty.tostr(simplify(node, pol ~= false))
 		return "nil"
 
 	------ subst in place --------------
@@ -228,26 +228,51 @@ return ->
 
 	var constrain
 
+	var tuple_shape = \t ->
+		var n = #t
+		if n > 0 and t[n] and t[n].varargs
+			return "at least " .. (n - 1)
+		return tostring(n)
+
+	var tuple_render = \t ->
+		return describe(ty.tuple(t))
+
 	var constrain_tuple = \lhs, rhs, contra, cache ->
-		var i, n = 0, #lhs
+		var ln, rn = #lhs, #rhs
+		var ltail = ln > 0 and lhs[ln] and lhs[ln].varargs and lhs[ln] or nil
+		var rtail = rn > 0 and rhs[rn] and rhs[rn].varargs and rhs[rn] or nil
+		var mismatch = "tuple arity mismatch: expected " .. tuple_shape(rhs) .. " " .. tuple_render(rhs) .. ", got " .. tuple_shape(lhs) .. " " .. tuple_render(lhs)
+		var i, n = 0, ln > rn and ln or rn
 		while i < n
 			i = i + 1
-			if rhs[i]
-				var ok, err
+			var l = lhs[i]
+			var r = rhs[i]
+			if not l
+				if not r
+					break
 				if contra
-					ok, err = constrain(rhs[i], lhs[i], cache)
+					if not ltail
+						return false, mismatch
+					l = ltail
 				else
-					ok, err = constrain(lhs[i], rhs[i], cache)
-				if not ok
-					return false, err
+					if r.varargs and i == rn
+						return true
+					return false, mismatch
+			else if not r
+				if contra
+					if l.varargs and i == ln
+						return true
+					return false, mismatch
+				if not rtail
+					return false, mismatch
+				r = rtail
+			var ok, err
+			if contra
+				ok, err = constrain(r, l, cache)
 			else
-				if not lhs[i].varargs
-					return false, "tuple arity mismatch"
-				return true
-		if i < #rhs
-			i = i + 1
-			if not rhs[i].varargs
-				return false, "tuple arity mismatch"
+				ok, err = constrain(l, r, cache)
+			if not ok
+				return false, err
 		return true
 
 	var bind_upper = \lhs_var, rhs, cache ->
@@ -428,11 +453,20 @@ return ->
 			return true
 
 		if rhs.tag == TType.Or
+			var last_err = "cannot match any part of union"
 			for _, t in ipairs(rhs)
-				var ok = constrain(lhs, t, cache)
-				if ok
-					return true
-			return false, "cannot match any part of union"
+				if t.tag ~= TType.New
+					var ok, err = constrain(lhs, t, cache)
+					if ok
+						return true
+					last_err = err or last_err
+			for _, t in ipairs(rhs)
+				if t.tag == TType.New
+					var ok, err = constrain(lhs, t, cache)
+					if ok
+						return true
+					last_err = err or last_err
+			return false, last_err
 
 		if lhs.tag == TType.And
 			var last_err = "cannot constrain intersection"
@@ -464,7 +498,7 @@ return ->
 			if lhs.tag == TType.Val
 				if lhs.type == rhs.type
 					return true
-				return false, "primitive mismatch: " .. describe(lhs) .. " vs " .. describe(rhs)
+				return false, "expected " .. describe(rhs) .. ", got " .. describe(lhs)
 			if lhs.tag == TType.Func
 				var lhs_outs = lhs.outs or ty.tuple_none()
 				var rhs_outs = rhs.outs or ty.tuple_none()
@@ -486,7 +520,7 @@ return ->
 							return false, err
 				return true
 
-		return false, "may be " .. describe(lhs) .. " instead of " .. describe(rhs)
+		return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
 
 	return {
 		apply = apply
