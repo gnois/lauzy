@@ -252,7 +252,7 @@ local render = function(t, parent_prec)
     parent_prec = parent_prec or -1
     local rule = Str[t.tag]
     local s = rule(t)
-    if t.varargs then
+    if t.varargs and (t.tag == TType.New or t.tag == TType.Top or t.tag == TType.Bot) then
         s = s .. "*"
     end
     local my_prec = Prec[t.tag] or 3
@@ -277,6 +277,9 @@ Str[TType.Tuple] = function(t)
     local out = {}
     for i, v in ipairs(t) do
         out[i] = render(v, -1)
+    end
+    if #out == 1 then
+        return out[1]
     end
     return "(" .. table.concat(out, ", ") .. ")"
 end
@@ -320,43 +323,22 @@ Str[TType.And] = function(t)
     return table.concat(list, "&")
 end
 Str[TType.Top] = function()
-    return "Top"
+    return "Any"
 end
 Str[TType.Bot] = function()
-    return "Bot"
+    return "None"
 end
 Str[TType.Neg] = function(t)
     return "~" .. render(t[1], 3)
 end
-local top_t = Type.top()
-local bot_t = Type.bot()
-local nil_t = Type["nil"]()
-local num_t = Type.num()
-local str_t = Type.str()
-local bool_t = Type.bool()
 local tuple_none_t = Type.tuple({})
 return {
-    ["nil"] = function()
-        return nil_t
-    end
-    , num = function()
-        return num_t
-    end
-    , str = function()
-        return str_t
-    end
-    , bool = function()
-        return bool_t
-    end
-    , top = function()
-        return top_t
-    end
-    , bot = function()
-        return bot_t
-    end
-    , tuple_none = function()
-        return tuple_none_t
-    end
+    ["nil"] = Type["nil"]
+    , num = Type.num
+    , str = Type.str
+    , bool = Type.bool
+    , top = Type.top
+    , bot = Type.bot
     , tuple = Type.tuple
     , func = Type.func
     , tbl = Type.tbl
@@ -364,6 +346,9 @@ return {
     , ["and"] = Type["and"]
     , neg = Type.neg
     , new_var = Type.new_var
+    , tuple_none = function()
+        return tuple_none_t
+    end
     , varargs = varargs
     , same = same
     , clone = clone

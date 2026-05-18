@@ -83,7 +83,7 @@ return function(scope, stmts, warn, import, typecheck)
                 local act = solv.describe(actual)
                 local exp = solv.describe(expected)
                 local eup = solv.describe(expected, false)
-                local snapshot = " => " .. act .. " <: " .. exp
+                local snapshot = " [ " .. act .. " <: " .. exp .. " ]"
                 if eup ~= exp then
                     snapshot = snapshot .. "  (upper: " .. eup .. ")"
                 end
@@ -97,9 +97,12 @@ return function(scope, stmts, warn, import, typecheck)
         local name = callable_name(expr)
         if name then
             if side then
-                return side .. " operand `" .. name .. "` "
+                return side .. " operand `" .. name .. "` of operator `" .. op .. "` "
             end
-            return "operand `" .. name .. "` "
+            return "operand `" .. name .. "` of operator `" .. op .. "` "
+        end
+        if side then
+            return side .. " operand of `" .. op .. "` "
         end
         return "operator `" .. op .. "` "
     end
@@ -218,8 +221,8 @@ return function(scope, stmts, warn, import, typecheck)
             if fn.tag == TType.New then
                 solv.extend(fn, expected)
             elseif fn.tag == TType.Func then
-                check_args(fn.ins, atypes, node, fname)
-                if fn.outs then
+                local args_ok = check_args(fn.ins, atypes, node, fname)
+                if fn.outs and args_ok ~= false then
                     return fn.outs
                 end
             else
@@ -569,17 +572,31 @@ return function(scope, stmts, warn, import, typecheck)
             end
         end
         if node.elses then
-            if #node.tests == 1 then
-                local gname, gtype = type_guard(node.tests[1])
+            local neg_map = {}
+            local neg_keys = {}
+            for i = 1, #node.tests do
+                local gname, gtype = type_guard(node.tests[i])
                 if gname then
-                    local __, orig = scope.declared(gname)
-                    scope.update_var(gname, ty.neg(gtype))
-                    check_block(node.elses)
-                    scope.update_var(gname, orig)
-                    return nil
+                    if not neg_map[gname] then
+                        local __, orig = scope.declared(gname)
+                        neg_map[gname] = {orig = orig, neg = ty.neg(gtype)}
+                        neg_keys[#neg_keys + 1] = gname
+                    else
+                        neg_map[gname].neg = ty["and"](neg_map[gname].neg, ty.neg(gtype))
+                    end
                 end
             end
-            check_block(node.elses)
+            if #neg_keys > 0 then
+                for _, gname in ipairs(neg_keys) do
+                    scope.update_var(gname, neg_map[gname].neg)
+                end
+                check_block(node.elses)
+                for _, gname in ipairs(neg_keys) do
+                    scope.update_var(gname, neg_map[gname].orig)
+                end
+            else
+                check_block(node.elses)
+            end
         end
     end
     Stmt[TStmt.Forin] = function(node)

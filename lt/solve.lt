@@ -48,7 +48,10 @@ return ->
 			ensure_var(node)
 			var rep = subs[node.id]
 			if rep and rep ~= node
-				return coalesce(rep, pol, seen)
+				-- propagate varargs flag when following a substitution
+				-- so that varargs param vars keep their * after being bound to a concrete type
+				var result = coalesce(rep, pol, seen)
+				return ty.keep_varargs(node, result)
 			var mark = tostring(node.id) .. (pol and "+" or "-")
 			if seen[mark]
 				return node
@@ -57,16 +60,22 @@ return ->
 			-- MLstruct: polarity collapse - unconstrained var becomes bot/top
 			if #bounds == 0
 				seen[mark] = nil
-				return pol and ty.bot() or ty.top()
-			var out = node
+				return ty.keep_varargs(node, pol and ty.bot() or ty.top())
+			-- do NOT seed with node itself: coalesce replaces a var with the join/meet of its bounds
+			var out = nil
 			for _, b in ipairs(bounds)
 				var c = coalesce(b, pol, seen)
-				if pol
+				if out == nil
+					out = c
+				else if pol
 					out = ty.or(out, c)
 				else
 					out = ty.and(out, c)
 			seen[mark] = nil
-			return ty.keep_varargs(node, out)
+			var result = out or (pol and ty.bot() or ty.top())
+			-- preserve varargs flag: a varargs param var coalescing to Top must stay Top*
+			-- so pvar detection in check_args works after module export simplification
+			return ty.keep_varargs(node, result)
 
 		if node.tag == TType.Func
 			return ty.keep_varargs(node, {
@@ -451,24 +460,37 @@ return ->
 			return true
 
 		if lhs.tag == TType.Top and rhs.tag ~= TType.Top
-			return false, "cannot constrain <Top> to narrower type"
+			return false, "cannot constrain Any to narrower type"
 
 		if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot
-			return false, "cannot constrain non-bottom to <Bot>"
+			return false, "cannot constrain non-bottom to None"
 
 		-- MLstruct: negation constraint rules
-		-- lhs <: ~rhs_inner  iff  lhs & rhs_inner <: Bot (i.e. they are disjoint)
-		-- For Val types we can check disjointness directly
+		-- lhs <: ~rhs_inner  iff  lhs and rhs_inner are disjoint types
 		if rhs.tag == TType.Neg
-			var inner = rhs[1]
-			if inner.tag == TType.Val and lhs.tag == TType.Val
-				if lhs.type ~= inner.type
+			var rinner = rhs[1]
+			-- ~A <: ~B iff B <: A (contravariance of negation)
+			if lhs.tag == TType.Neg
+				return constrain(rinner, lhs[1], cache)
+			-- For Val types: lhs <: ~Val(t) iff lhs.type != t
+			if rinner.tag == TType.Val and lhs.tag == TType.Val
+				if lhs.type ~= rinner.type
 					return true  -- disjoint val types satisfy ~T
 				return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+			if lhs.tag == TType.Bot
+				return true
 			return true  -- conservatively allow for non-Val negations
 
-		-- ~lhs_inner <: rhs means lhs_inner | rhs covers everything (Top)
+		-- ~lhs_inner <: rhs
 		if lhs.tag == TType.Neg
+			var linner = lhs[1]
+			-- ~A <: ~B already handled above; handle ~Val(t) <: Val(t2): t != t2 means disjoint, allow
+			if rhs.tag == TType.Val and linner.tag == TType.Val
+				if linner.type ~= rhs.type
+					return true  -- complement of num can satisfy str (conservative)
+				return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+			if rhs.tag == TType.Top
+				return true
 			return true  -- conservatively allow negation on lhs
 
 		if lhs.tag == TType.New

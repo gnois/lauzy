@@ -53,7 +53,8 @@ return function()
             ensure_var(node)
             local rep = subs[node.id]
             if rep and rep ~= node then
-                return coalesce(rep, pol, seen)
+                local result = coalesce(rep, pol, seen)
+                return ty.keep_varargs(node, result)
             end
             local mark = tostring(node.id) .. (pol and "+" or "-")
             if seen[mark] then
@@ -63,19 +64,22 @@ return function()
             local bounds = pol and node.sub or node.sup
             if #bounds == 0 then
                 seen[mark] = nil
-                return pol and ty.bot() or ty.top()
+                return ty.keep_varargs(node, pol and ty.bot() or ty.top())
             end
-            local out = node
+            local out = nil
             for _, b in ipairs(bounds) do
                 local c = coalesce(b, pol, seen)
-                if pol then
+                if out == nil then
+                    out = c
+                elseif pol then
                     out = ty["or"](out, c)
                 else
                     out = ty["and"](out, c)
                 end
             end
             seen[mark] = nil
-            return ty.keep_varargs(node, out)
+            local result = out or (pol and ty.bot() or ty.top())
+            return ty.keep_varargs(node, result)
         end
         if node.tag == TType.Func then
             return ty.keep_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen), outs = coalesce(node.outs, pol, seen)})
@@ -531,22 +535,38 @@ return function()
             return true
         end
         if lhs.tag == TType.Top and rhs.tag ~= TType.Top then
-            return false, "cannot constrain <Top> to narrower type"
+            return false, "cannot constrain Any to narrower type"
         end
         if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot then
-            return false, "cannot constrain non-bottom to <Bot>"
+            return false, "cannot constrain non-bottom to None"
         end
         if rhs.tag == TType.Neg then
-            local inner = rhs[1]
-            if inner.tag == TType.Val and lhs.tag == TType.Val then
-                if lhs.type ~= inner.type then
+            local rinner = rhs[1]
+            if lhs.tag == TType.Neg then
+                return constrain(rinner, lhs[1], cache)
+            end
+            if rinner.tag == TType.Val and lhs.tag == TType.Val then
+                if lhs.type ~= rinner.type then
                     return true
                 end
                 return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
             end
+            if lhs.tag == TType.Bot then
+                return true
+            end
             return true
         end
         if lhs.tag == TType.Neg then
+            local linner = lhs[1]
+            if rhs.tag == TType.Val and linner.tag == TType.Val then
+                if linner.type ~= rhs.type then
+                    return true
+                end
+                return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+            end
+            if rhs.tag == TType.Top then
+                return true
+            end
             return true
         end
         if lhs.tag == TType.New then

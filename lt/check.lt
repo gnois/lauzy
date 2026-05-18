@@ -76,7 +76,7 @@ return \scope, stmts, warn, import, typecheck ->
 				var act = solv.describe(actual)
 				var exp = solv.describe(expected)
 				var eup = solv.describe(expected, false)
-				var snapshot = " => " .. act .. " <: " .. exp
+				var snapshot = ' [ ' .. act .. " <: " .. exp .. ' ]'
 				if eup ~= exp
 					snapshot = snapshot .. "  (upper: " .. eup .. ")"
 				warn(node.line, node.col, 1, msg .. err .. snapshot)
@@ -87,8 +87,10 @@ return \scope, stmts, warn, import, typecheck ->
 		var name = callable_name(expr)
 		if name
 			if side
-				return side .. " operand `" .. name .. "` "
-			return "operand `" .. name .. "` "
+				return side .. " operand `" .. name .. "` of operator `" .. op .. "` "
+			return "operand `" .. name .. "` of operator `" .. op .. "` "
+		if side
+			return side .. " operand of `" .. op .. "` "
 		return "operator `" .. op .. "` "
 
 	var check_op = \expected, actual, node, op, expr, side ->
@@ -190,8 +192,8 @@ return \scope, stmts, warn, import, typecheck ->
 			if fn.tag == TType.New
 				solv.extend(fn, expected)
 			else if fn.tag == TType.Func
-				check_args(fn.ins, atypes, node, fname)
-				if fn.outs
+				var args_ok = check_args(fn.ins, atypes, node, fname)
+				if fn.outs and args_ok ~= false
 					return fn.outs
 			--``
 			else if fn.tag == TType.Nil or fn.tag == TType.Val
@@ -395,6 +397,7 @@ return \scope, stmts, warn, import, typecheck ->
 
 		var op = node.op
 		if op == 'and'
+			-- x and y: returns x if falsy, else y; union is a safe over-approximation
 			return ty.or(ltype, rtype)
 
 		if arithmetic(op) or relational(op)
@@ -528,16 +531,28 @@ return \scope, stmts, warn, import, typecheck ->
 			else
 				check_block(node.thenss[i])
 		if node.elses
-			-- MLstruct: narrow to negation type in else-branch (single guard only)
-			if #node.tests == 1
-				var gname, gtype = type_guard(node.tests[1])
+			-- MLstruct: narrow each guarded variable to the intersection of negations of all guards
+			-- e.g. if type(x)=="num" ... else if type(x)=="str" ... else -> x: ~num & ~str
+			var neg_map = {}
+			var neg_keys = {}
+			for i = 1, #node.tests
+				var gname, gtype = type_guard(node.tests[i])
 				if gname
-					var __, orig = scope.declared(gname)
-					scope.update_var(gname, ty.neg(gtype))
-					check_block(node.elses)
-					scope.update_var(gname, orig)
-					return nil
-			check_block(node.elses)
+					if not neg_map[gname]
+						var __, orig = scope.declared(gname)
+						neg_map[gname] = { orig = orig, neg = ty.neg(gtype) }
+						neg_keys[#neg_keys + 1] = gname
+					else
+						-- intersect: ~A & ~B for same variable
+						neg_map[gname].neg = ty.and(neg_map[gname].neg, ty.neg(gtype))
+			if #neg_keys > 0
+				for _, gname in ipairs(neg_keys)
+					scope.update_var(gname, neg_map[gname].neg)
+				check_block(node.elses)
+				for _, gname in ipairs(neg_keys)
+					scope.update_var(gname, neg_map[gname].orig)
+			else
+				check_block(node.elses)
 
 	Stmt[TStmt.Forin] = \node ->
 		scope.enter_forin()
