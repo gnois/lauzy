@@ -103,7 +103,13 @@ if src
 		var created = {}  -- folders created
 		var existed = {}  -- folders already exist
 		var skips = {}  -- files not overwritten or failed to compile
-		for __, file in pairs(imports)
+		-- sort import keys so transpilation order is deterministic across runs
+		var import_keys = {}
+		for k in pairs(imports)
+			table.insert(import_keys, k)
+		table.sort(import_keys)
+		for _, k in ipairs(import_keys)
+			var file = imports[k]
 			-- construct output file path
 			var dest = dst
 			if not single

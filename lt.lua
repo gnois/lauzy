@@ -105,7 +105,13 @@ if src then
         local created = {}
         local existed = {}
         local skips = {}
-        for __, file in pairs(imports) do
+        local import_keys = {}
+        for k in pairs(imports) do
+            table.insert(import_keys, k)
+        end
+        table.sort(import_keys)
+        for _, k in ipairs(import_keys) do
+            local file = imports[k]
             local dest = dst
             if not single then
                 dest = string.gsub(file.path, "%.lt", ".lua")

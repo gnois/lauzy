@@ -165,6 +165,15 @@ local Type = {
     , ["and"] = function(...)
         return create(TType.And, flatten(TType.And, {...}))
     end
+    , top = function()
+        return create(TType.Top, {})
+    end
+    , bot = function()
+        return create(TType.Bot, {})
+    end
+    , neg = function(inner)
+        return create(TType.Neg, {inner})
+    end
     , new_var = new_var
 }
 local varargs = function(t)
@@ -226,6 +235,12 @@ simplify = function(node, seen)
             out[i] = {simplify(tk[1], seen), key}
         end
         return keep_varargs(node, Type.tbl(out))
+    end
+    if node.tag == TType.Neg then
+        return keep_varargs(node, Type.neg(simplify(node[1], seen)))
+    end
+    if node.tag == TType.Top or node.tag == TType.Bot then
+        return node
     end
     return node
 end
@@ -304,6 +319,17 @@ Str[TType.And] = function(t)
     end
     return table.concat(list, "&")
 end
+Str[TType.Top] = function()
+    return "Top"
+end
+Str[TType.Bot] = function()
+    return "Bot"
+end
+Str[TType.Neg] = function(t)
+    return "~" .. render(t[1], 3)
+end
+local top_t = Type.top()
+local bot_t = Type.bot()
 local nil_t = Type["nil"]()
 local num_t = Type.num()
 local str_t = Type.str()
@@ -322,6 +348,12 @@ return {
     , bool = function()
         return bool_t
     end
+    , top = function()
+        return top_t
+    end
+    , bot = function()
+        return bot_t
+    end
     , tuple_none = function()
         return tuple_none_t
     end
@@ -330,6 +362,7 @@ return {
     , tbl = Type.tbl
     , ["or"] = Type["or"]
     , ["and"] = Type["and"]
+    , neg = Type.neg
     , new_var = Type.new_var
     , varargs = varargs
     , same = same

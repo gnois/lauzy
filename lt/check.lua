@@ -528,12 +528,57 @@ return function(scope, stmts, warn, import, typecheck)
     Stmt[TStmt.Do] = function(node)
         check_block(node.body)
     end
+    local typestr_to_ctor = {number = ty.num, string = ty.str, boolean = ty.bool, ["nil"] = ty["nil"], table = function()
+        return ty.tbl({})
+    end}
+    local type_guard = function(test)
+        if test.tag ~= TExpr.Binary or test.op ~= "==" then
+            return nil
+        end
+        local call, strnode = test.left, test.right
+        if call.tag == TExpr.String and strnode.tag == TExpr.Call then
+            call, strnode = strnode, call
+        end
+        if call.tag ~= TExpr.Call or strnode.tag ~= TExpr.String then
+            return nil
+        end
+        if call.func.tag ~= TExpr.Id or call.func.name ~= "type" then
+            return nil
+        end
+        if not (call.args[1] and call.args[1].tag == TExpr.Id) then
+            return nil
+        end
+        local ctor = typestr_to_ctor[strnode.value]
+        if not ctor then
+            return nil
+        end
+        return call.args[1].name, ctor()
+    end
     Stmt[TStmt.If] = function(node)
         for i = 1, #node.tests do
-            infer_expr(node.tests[i])
-            check_block(node.thenss[i])
+            local test = node.tests[i]
+            infer_expr(test)
+            local gname, gtype = type_guard(test)
+            if gname then
+                local __, orig = scope.declared(gname)
+                scope.update_var(gname, gtype)
+                check_block(node.thenss[i])
+                scope.update_var(gname, orig)
+            else
+                check_block(node.thenss[i])
+            end
         end
         if node.elses then
+            if #node.tests == 1 then
+                local gname, gtype = type_guard(node.tests[1])
+                if gname then
+                    local __, orig = scope.declared(gname)
+                    scope.update_var(gname, ty.neg(gtype))
+                    check_block(node.elses)
+                    scope.update_var(gname, orig)
+                    return nil
+                end
+            end
             check_block(node.elses)
         end
     end
