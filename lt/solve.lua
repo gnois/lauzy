@@ -61,6 +61,10 @@ return function()
             end
             seen[mark] = true
             local bounds = pol and node.sub or node.sup
+            if #bounds == 0 then
+                seen[mark] = nil
+                return pol and ty.bot() or ty.top()
+            end
             local out = node
             for _, b in ipairs(bounds) do
                 local c = coalesce(b, pol, seen)
@@ -108,6 +112,12 @@ return function()
             end
             return ty.keep_varargs(node, ty.tbl(out))
         end
+        if node.tag == TType.Neg then
+            return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen)))
+        end
+        if node.tag == TType.Top or node.tag == TType.Bot then
+            return node
+        end
         return node
     end
     local simplify = function(node, pol)
@@ -151,6 +161,10 @@ return function()
             end
             return node
         end
+        if node.tag == TType.Neg then
+            node[1] = subst(node[1], tvar, texp)
+            return node
+        end
         return node
     end
     local apply
@@ -178,6 +192,9 @@ return function()
                 node[i] = {apply(node[i][1]), node[i][2] and apply(node[i][2])}
             end
             return node
+        end
+        if node.tag == TType.Neg then
+            return ty.keep_varargs(node, ty.neg(apply(node[1])))
         end
         return node
     end
@@ -215,6 +232,9 @@ return function()
                 end
             end
             return false
+        end
+        if y.tag == TType.Neg then
+            return occurs(x, y[1], seen)
         end
         return false
     end
@@ -384,6 +404,9 @@ return function()
             end
             return lvl
         end
+        if node.tag == TType.Neg then
+            return level_of(node[1])
+        end
         return 0
     end
     local extrude
@@ -439,6 +462,9 @@ return function()
             end
             return ty.keep_varargs(node, ty.tbl(out))
         end
+        if node.tag == TType.Neg then
+            return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache)))
+        end
         return node
     end
     local instantiate = function(tyexp, lim, to_lvl)
@@ -484,6 +510,9 @@ return function()
                 end
                 return ty.keep_varargs(node, ty.tbl(out))
             end
+            if node.tag == TType.Neg then
+                return ty.keep_varargs(node, ty.neg(rec(node[1])))
+            end
             return node
         end
         return rec(tyexp)
@@ -506,6 +535,19 @@ return function()
         end
         if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot then
             return false, "cannot constrain non-bottom to <Bot>"
+        end
+        if rhs.tag == TType.Neg then
+            local inner = rhs[1]
+            if inner.tag == TType.Val and lhs.tag == TType.Val then
+                if lhs.type ~= inner.type then
+                    return true
+                end
+                return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+            end
+            return true
+        end
+        if lhs.tag == TType.Neg then
+            return true
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)

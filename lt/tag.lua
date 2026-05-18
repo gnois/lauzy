@@ -39,6 +39,7 @@ return {Stmt = {
     , Tbl = "Tbl"
     , Or = "Or"
     , And = "And"
+    , Neg = "Neg"
     , Top = "Top"
     , Bot = "Bot"
 }}

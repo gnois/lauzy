@@ -486,11 +486,57 @@ return \scope, stmts, warn, import, typecheck ->
 	Stmt[TStmt.Do] = \node ->
 		check_block(node.body)
 
+	-- MLstruct: map Lua type() strings to type constructors
+	var typestr_to_ctor = {
+		["number"] = ty.num,
+		["string"] = ty.str,
+		["boolean"] = ty.bool,
+		["nil"] = ty.nil,
+		["table"] = \-> return ty.tbl({})
+	}
+
+	-- MLstruct: detect type(x) == "typename" guard, return varname and narrowed type
+	var type_guard = \test ->
+		if test.tag ~= TExpr.Binary or test.op ~= '=='
+			return nil
+		var call, strnode = test.left, test.right
+		-- handle both type(x)=="t" and "t"==type(x)
+		if call.tag == TExpr.String and strnode.tag == TExpr.Call
+			call, strnode = strnode, call
+		if call.tag ~= TExpr.Call or strnode.tag ~= TExpr.String
+			return nil
+		if call.func.tag ~= TExpr.Id or call.func.name ~= 'type'
+			return nil
+		if not (call.args[1] and call.args[1].tag == TExpr.Id)
+			return nil
+		var ctor = typestr_to_ctor[strnode.value]
+		if not ctor
+			return nil
+		return call.args[1].name, ctor()
+
 	Stmt[TStmt.If] = \node ->
 		for i = 1, #node.tests
-			infer_expr(node.tests[i])
-			check_block(node.thenss[i])
+			var test = node.tests[i]
+			infer_expr(test)
+			-- MLstruct: flow-sensitive narrowing in then-branch
+			var gname, gtype = type_guard(test)
+			if gname
+				var __, orig = scope.declared(gname)
+				scope.update_var(gname, gtype)
+				check_block(node.thenss[i])
+				scope.update_var(gname, orig)
+			else
+				check_block(node.thenss[i])
 		if node.elses
+			-- MLstruct: narrow to negation type in else-branch (single guard only)
+			if #node.tests == 1
+				var gname, gtype = type_guard(node.tests[1])
+				if gname
+					var __, orig = scope.declared(gname)
+					scope.update_var(gname, ty.neg(gtype))
+					check_block(node.elses)
+					scope.update_var(gname, orig)
+					return nil
 			check_block(node.elses)
 
 	Stmt[TStmt.Forin] = \node ->

@@ -42,6 +42,7 @@ return {
 		, Tbl = 'Tbl'
 		, Or = 'Or' -- Union
 		, And = 'And' -- Intersect
+		, Neg = 'Neg' -- Negation
 		, Top = 'Top'
 		, Bot = 'Bot'
 	}

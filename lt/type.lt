@@ -141,6 +141,13 @@ var Type = {
 		return create(TType.Or, flatten(TType.Or, {...}))
 	, and = \... ->
 		return create(TType.And, flatten(TType.And, {...}))
+	-- MLstruct: top, bot, neg type constructors
+	, top = ->
+		return create(TType.Top, {})
+	, bot = ->
+		return create(TType.Bot, {})
+	, neg = \inner ->
+		return create(TType.Neg, {inner})
 	, new_var = new_var
 }
 
@@ -197,6 +204,13 @@ simplify = \node, seen ->
 				key = simplify(key, seen)
 			out[i] = { simplify(tk[1], seen), key }
 		return keep_varargs(node, Type.tbl(out))
+
+	-- MLstruct: negation simplifies by simplifying its inner type
+	if node.tag == TType.Neg
+		return keep_varargs(node, Type.neg(simplify(node[1], seen)))
+
+	if node.tag == TType.Top or node.tag == TType.Bot
+		return node
 
 	return node
 
@@ -266,7 +280,13 @@ Str[TType.And] = \t ->
 	for i, x in ipairs(t)
 		list[i] = render(x, Prec[TType.And])
 	return table.concat(list, '&')
+-- MLstruct: Top, Bot, Neg renderers
+Str[TType.Top] = -> return "Top"
+Str[TType.Bot] = -> return "Bot"
+Str[TType.Neg] = \t -> return "~" .. render(t[1], 3)
 -- shortcut
+var top_t = Type.top()
+var bot_t = Type.bot()
 var nil_t = Type.nil()
 var num_t = Type.num()
 var str_t = Type.str()
@@ -278,12 +298,16 @@ return {
 	, num = -> return num_t
 	, str = -> return str_t
 	, bool = -> return bool_t
+	-- MLstruct: top/bot/neg exported
+	, top = -> return top_t
+	, bot = -> return bot_t
 	, tuple_none = -> return tuple_none_t
 	, tuple = Type.tuple
 	, func = Type.func
 	, tbl = Type.tbl
 	, or = Type.or
 	, and = Type.and
+	, neg = Type.neg
 	, new_var = Type.new_var
 	, varargs = varargs
 	, same = same

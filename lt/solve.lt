@@ -54,6 +54,10 @@ return ->
 				return node
 			seen[mark] = true
 			var bounds = pol and node.sub or node.sup
+			-- MLstruct: polarity collapse - unconstrained var becomes bot/top
+			if #bounds == 0
+				seen[mark] = nil
+				return pol and ty.bot() or ty.top()
 			var out = node
 			for _, b in ipairs(bounds)
 				var c = coalesce(b, pol, seen)
@@ -98,6 +102,13 @@ return ->
 				out[i] = { coalesce(tk[1], pol, seen), key }
 			return ty.keep_varargs(node, ty.tbl(out))
 
+		-- MLstruct: negation flips polarity
+		if node.tag == TType.Neg
+			return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen)))
+
+		if node.tag == TType.Top or node.tag == TType.Bot
+			return node
+
 		return node
 
 	var simplify = \node, pol ->
@@ -132,6 +143,9 @@ return ->
 			for i = 1, #node
 				node[i] = { subst(node[i][1], tvar, texp), node[i][2] and subst(node[i][2], tvar, texp) }
 			return node
+		if node.tag == TType.Neg
+			node[1] = subst(node[1], tvar, texp)
+			return node
 		return node
 
 
@@ -155,6 +169,8 @@ return ->
 			for i = 1, #node
 				node[i] = { apply(node[i][1]), node[i][2] and apply(node[i][2]) }
 			return node
+		if node.tag == TType.Neg
+			return ty.keep_varargs(node, ty.neg(apply(node[1])))
 		return node
 
 
@@ -183,6 +199,8 @@ return ->
 				if occurs(x, tk[1], seen) or (tk[2] and occurs(x, tk[2], seen))
 					return true
 			return false
+		if y.tag == TType.Neg
+			return occurs(x, y[1], seen)
 		return false
 
 
@@ -321,6 +339,8 @@ return ->
 				if "table" == type(tk[2])
 					lvl = math.max(lvl, level_of(tk[2]))
 			return lvl
+		if node.tag == TType.Neg
+			return level_of(node[1])
 		return 0
 
 	var extrude
@@ -367,6 +387,9 @@ return ->
 					key = extrude(key, pol, lim, cache)
 				out[i] = { extrude(tk[1], pol, lim, cache), key }
 			return ty.keep_varargs(node, ty.tbl(out))
+		-- MLstruct: negation flips polarity on extrude
+		if node.tag == TType.Neg
+			return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache)))
 		return node
 
 	var instantiate = \tyexp, lim, to_lvl ->
@@ -407,6 +430,8 @@ return ->
 				for i, tk in ipairs(node)
 					out[i] = { rec(tk[1]), tk[2] and rec(tk[2]) or tk[2] }
 				return ty.keep_varargs(node, ty.tbl(out))
+			if node.tag == TType.Neg
+				return ty.keep_varargs(node, ty.neg(rec(node[1])))
 			return node
 
 		return rec(tyexp)
@@ -430,6 +455,21 @@ return ->
 
 		if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot
 			return false, "cannot constrain non-bottom to <Bot>"
+
+		-- MLstruct: negation constraint rules
+		-- lhs <: ~rhs_inner  iff  lhs & rhs_inner <: Bot (i.e. they are disjoint)
+		-- For Val types we can check disjointness directly
+		if rhs.tag == TType.Neg
+			var inner = rhs[1]
+			if inner.tag == TType.Val and lhs.tag == TType.Val
+				if lhs.type ~= inner.type
+					return true  -- disjoint val types satisfy ~T
+				return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+			return true  -- conservatively allow for non-Val negations
+
+		-- ~lhs_inner <: rhs means lhs_inner | rhs covers everything (Top)
+		if lhs.tag == TType.Neg
+			return true  -- conservatively allow negation on lhs
 
 		if lhs.tag == TType.New
 			var lhsv = ensure_var(lhs)

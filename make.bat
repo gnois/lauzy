@@ -6,9 +6,9 @@ if [%1]==[nuke] (
 	del "%ROOT%\lt\*.lua"
 ) else (
 	pushd "%ROOT%"
-	luajit lt.lua -f lt.lt .
+	luajit lt.lua -f lt.lt . %1
 	popd
-	pause
+	rem pause
 	pushd "%ROOT%"
 	luajit run-test.lua
 	popd
