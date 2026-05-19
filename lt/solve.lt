@@ -459,32 +459,90 @@ return ->
 			return false, "cannot constrain non-bottom to None"
 
 		-- MLstruct: negation constraint rules
-		-- lhs <: ~rhs_inner  iff  lhs and rhs_inner are disjoint types
+		-- lhs <: ~rinner  holds iff lhs and rinner are disjoint
 		if rhs.tag == TType.Neg
 			var rinner = rhs[1]
 			-- ~A <: ~B iff B <: A (contravariance of negation)
 			if lhs.tag == TType.Neg
 				return constrain(rinner, lhs[1], cache)
-			-- For Val types: lhs <: ~Val(t) iff lhs.type != t
-			if rinner.tag == TType.Val and lhs.tag == TType.Val
-				if lhs.type ~= rinner.type
-					return true  -- disjoint val types satisfy ~T
-				return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+			-- bot <: anything
 			if lhs.tag == TType.Bot
 				return true
-			return true  -- conservatively allow for non-Val negations
+			-- type var: record ~rinner as an upper bound so the constraint propagates
+			if lhs.tag == TType.New
+				return bind_upper(ensure_var(lhs), rhs, cache)
+			-- A | B <: ~C  iff  A <: ~C  AND  B <: ~C
+			if lhs.tag == TType.Or
+				for _, t in ipairs(lhs)
+					var ok, err = constrain(t, rhs, cache)
+					if not ok
+						return false, err
+				return true
+			-- De Morgan: lhs <: ~(A | B)  iff  lhs <: ~A AND lhs <: ~B
+			if rinner.tag == TType.Or
+				for _, t in ipairs(rinner)
+					var ok, err = constrain(lhs, ty.neg(t), cache)
+					if not ok
+						return false, err
+				return true
+			-- De Morgan: lhs <: ~(A & B)  iff  lhs <: ~A OR lhs <: ~B
+			if rinner.tag == TType.And
+				for _, t in ipairs(rinner)
+					var ok = constrain(lhs, ty.neg(t), cache)
+					if ok
+						return true
+				return false, describe(lhs) .. " does not satisfy " .. describe(rhs)
+			-- Same-family checks: types in the same family are NOT disjoint, fail
+			-- nil <: ~nil: nil is not disjoint from nil
+			if lhs.tag == TType.Nil and rinner.tag == TType.Nil
+				return false, "type nil does not satisfy " .. describe(rhs)
+			-- Val(t) <: ~Val(t2): disjoint iff t != t2
+			if lhs.tag == TType.Val and rinner.tag == TType.Val
+				if lhs.type == rinner.type
+					return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+				return true
+			-- Val or Nil vs Func/Tbl: always disjoint
+			if (lhs.tag == TType.Val or lhs.tag == TType.Nil) and (rinner.tag == TType.Func or rinner.tag == TType.Tbl)
+				return true
+			-- Func/Tbl vs Val or Nil: always disjoint
+			if (lhs.tag == TType.Func or lhs.tag == TType.Tbl) and (rinner.tag == TType.Val or rinner.tag == TType.Nil)
+				return true
+			-- Func vs Tbl: always disjoint
+			if lhs.tag == TType.Func and rinner.tag == TType.Tbl
+				return true
+			if lhs.tag == TType.Tbl and rinner.tag == TType.Func
+				return true
+			-- Same complex family (Func/Tbl both): cannot prove disjointness statically
+			return false, describe(lhs) .. " does not satisfy " .. describe(rhs)
 
 		-- ~lhs_inner <: rhs
 		if lhs.tag == TType.Neg
-			var linner = lhs[1]
-			-- ~A <: ~B already handled above; handle ~Val(t) <: Val(t2): t != t2 means disjoint, allow
-			if rhs.tag == TType.Val and linner.tag == TType.Val
-				if linner.type ~= rhs.type
-					return true  -- complement of num can satisfy str (conservative)
-				return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+			-- ~A <: ~B already handled above in rhs.tag == Neg
 			if rhs.tag == TType.Top
 				return true
-			return true  -- conservatively allow negation on lhs
+			-- type var on rhs: record ~lhs as a lower bound
+			if rhs.tag == TType.New
+				return bind_lower(ensure_var(rhs), lhs, cache)
+			-- ~A <: B | C: try each alternative (delegate back to constrain)
+			if rhs.tag == TType.Or
+				for _, t in ipairs(rhs)
+					var ok = constrain(lhs, t, cache)
+					if ok
+						return true
+				return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+			-- ~A <: B & C: must satisfy all parts
+			if rhs.tag == TType.And
+				for _, t in ipairs(rhs)
+					var ok, err = constrain(lhs, t, cache)
+					if not ok
+						return false, err
+				return true
+			-- ~A <: concrete: only true when ~Bot (= Top) <: anything, already handled above.
+			-- ~Val(t) <: Val(t2): the complement of a primitive is NOT a subtype of another primitive
+			-- because it includes values of all other families too.
+			-- ~nil <: Val/Func/Tbl: similarly, ~nil is not a subtype of any concrete type.
+			-- All concrete rhs cases fall through to false.
+			return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
 
 		if lhs.tag == TType.New
 			var lhsv = ensure_var(lhs)
@@ -508,15 +566,27 @@ return ->
 			return true
 
 		if rhs.tag == TType.Or
+			-- lhs <: A | B: satisfied if lhs fits any alternative.
+			-- If lhs is a type variable, a failed branch may have mutated its bounds (via bind_upper/bind_lower).
+			-- We do a lightweight rollback by remembering just the bound-list lengths before each attempt.
+			-- For concrete lhs no bounds are mutated, so no rollback is needed.
 			var last_err = "cannot match any part of union"
-			for _, t in ipairs(rhs)
-				if t.tag ~= TType.New
+			if lhs.tag == TType.New
+				var lhsv = ensure_var(lhs)
+				for _, t in ipairs(rhs)
+					var sub_n = #lhsv.sub
+					var sup_n = #lhsv.sup
 					var ok, err = constrain(lhs, t, cache)
 					if ok
 						return true
+					-- rollback any bounds appended during this failed attempt
+					while #lhsv.sub > sub_n
+						lhsv.sub[#lhsv.sub] = nil
+					while #lhsv.sup > sup_n
+						lhsv.sup[#lhsv.sup] = nil
 					last_err = err or last_err
-			for _, t in ipairs(rhs)
-				if t.tag == TType.New
+			else
+				for _, t in ipairs(rhs)
 					var ok, err = constrain(lhs, t, cache)
 					if ok
 						return true

@@ -538,29 +538,88 @@ return function()
             if lhs.tag == TType.Neg then
                 return constrain(rinner, lhs[1], cache)
             end
-            if rinner.tag == TType.Val and lhs.tag == TType.Val then
-                if lhs.type ~= rinner.type then
-                    return true
-                end
-                return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
-            end
             if lhs.tag == TType.Bot then
                 return true
             end
-            return true
+            if lhs.tag == TType.New then
+                return bind_upper(ensure_var(lhs), rhs, cache)
+            end
+            if lhs.tag == TType.Or then
+                for _, t in ipairs(lhs) do
+                    local ok, err = constrain(t, rhs, cache)
+                    if not ok then
+                        return false, err
+                    end
+                end
+                return true
+            end
+            if rinner.tag == TType.Or then
+                for _, t in ipairs(rinner) do
+                    local ok, err = constrain(lhs, ty.neg(t), cache)
+                    if not ok then
+                        return false, err
+                    end
+                end
+                return true
+            end
+            if rinner.tag == TType.And then
+                for _, t in ipairs(rinner) do
+                    local ok = constrain(lhs, ty.neg(t), cache)
+                    if ok then
+                        return true
+                    end
+                end
+                return false, describe(lhs) .. " does not satisfy " .. describe(rhs)
+            end
+            if lhs.tag == TType.Nil and rinner.tag == TType.Nil then
+                return false, "type nil does not satisfy " .. describe(rhs)
+            end
+            if lhs.tag == TType.Val and rinner.tag == TType.Val then
+                if lhs.type == rinner.type then
+                    return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+                end
+                return true
+            end
+            if (lhs.tag == TType.Val or lhs.tag == TType.Nil) and (rinner.tag == TType.Func or rinner.tag == TType.Tbl) then
+                return true
+            end
+            if (lhs.tag == TType.Func or lhs.tag == TType.Tbl) and (rinner.tag == TType.Val or rinner.tag == TType.Nil) then
+                return true
+            end
+            if lhs.tag == TType.Func and rinner.tag == TType.Tbl then
+                return true
+            end
+            if lhs.tag == TType.Tbl and rinner.tag == TType.Func then
+                return true
+            end
+            return false, describe(lhs) .. " does not satisfy " .. describe(rhs)
         end
         if lhs.tag == TType.Neg then
-            local linner = lhs[1]
-            if rhs.tag == TType.Val and linner.tag == TType.Val then
-                if linner.type ~= rhs.type then
-                    return true
-                end
-                return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
-            end
             if rhs.tag == TType.Top then
                 return true
             end
-            return true
+            if rhs.tag == TType.New then
+                return bind_lower(ensure_var(rhs), lhs, cache)
+            end
+            if rhs.tag == TType.Or then
+                for _, t in ipairs(rhs) do
+                    local ok = constrain(lhs, t, cache)
+                    if ok then
+                        return true
+                    end
+                end
+                return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+            end
+            if rhs.tag == TType.And then
+                for _, t in ipairs(rhs) do
+                    local ok, err = constrain(lhs, t, cache)
+                    if not ok then
+                        return false, err
+                    end
+                end
+                return true
+            end
+            return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)
@@ -589,17 +648,25 @@ return function()
         end
         if rhs.tag == TType.Or then
             local last_err = "cannot match any part of union"
-            for _, t in ipairs(rhs) do
-                if t.tag ~= TType.New then
+            if lhs.tag == TType.New then
+                local lhsv = ensure_var(lhs)
+                for _, t in ipairs(rhs) do
+                    local sub_n = #lhsv.sub
+                    local sup_n = #lhsv.sup
                     local ok, err = constrain(lhs, t, cache)
                     if ok then
                         return true
                     end
+                    while #lhsv.sub > sub_n do
+                        lhsv.sub[#lhsv.sub] = nil
+                    end
+                    while #lhsv.sup > sup_n do
+                        lhsv.sup[#lhsv.sup] = nil
+                    end
                     last_err = err or last_err
                 end
-            end
-            for _, t in ipairs(rhs) do
-                if t.tag == TType.New then
+            else
+                for _, t in ipairs(rhs) do
                     local ok, err = constrain(lhs, t, cache)
                     if ok then
                         return true
