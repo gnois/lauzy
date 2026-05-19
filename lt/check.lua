@@ -582,7 +582,11 @@ return function(scope, stmts, warn, import, typecheck)
             local gname, gtype = type_guard(test)
             if gname then
                 local __, orig = scope.declared(gname)
-                scope.update_var(gname, gtype)
+                local narrowed = gtype
+                if orig then
+                    narrowed = ty["and"](orig, gtype)
+                end
+                scope.update_var(gname, narrowed)
                 check_block(node.thenss[i])
                 scope.update_var(gname, orig)
             else
@@ -606,7 +610,11 @@ return function(scope, stmts, warn, import, typecheck)
             end
             if #neg_keys > 0 then
                 for _, gname in ipairs(neg_keys) do
-                    scope.update_var(gname, neg_map[gname].neg)
+                    local refined = neg_map[gname].neg
+                    if neg_map[gname].orig then
+                        refined = ty["and"](neg_map[gname].orig, neg_map[gname].neg)
+                    end
+                    scope.update_var(gname, refined)
                 end
                 check_block(node.elses)
                 for _, gname in ipairs(neg_keys) do
