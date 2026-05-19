@@ -1,17 +1,17 @@
 -- Grammar spec refer to https://github.com/Microsoft/TypeScript/blob/master/doc/spec.md#38-specifying-types
 
-var ast = require('lt.ast')
-var operator = require('lt.operator')
-var reserved = require('lt.reserved')
+let ast = require('lt.ast')
+let operator = require('lt.operator')
+let reserved = require('lt.reserved')
 
-var Stmt = ast.Stmt
-var Expr = ast.Expr
-var Keyword = reserved.Keyword
+let Stmt = ast.Stmt
+let Expr = ast.Expr
+let Keyword = reserved.Keyword
 
-var EndOfBlock = { TK_dedent = true, TK_else = true, TK_until = true, TK_eof = true, ['}'] = true, [')'] = true, [';'] = true, [','] = true }
-var NewLine = { TK_newline = true }
+let EndOfBlock = { TK_dedent = true, TK_else = true, TK_until = true, TK_eof = true, ['}'] = true, [')'] = true, [';'] = true, [','] = true }
+let NewLine = { TK_newline = true }
 -- expr kind
-var Kind = { Expr = 'Expr', Var = 'Var', Field = 'Field', Index = 'Index', Call = 'Call' }
+let Kind = { Expr = 'Expr', Var = 'Var', Field = 'Field', Index = 'Index', Call = 'Call' }
 
 
 return \ls, warn ->
@@ -394,8 +394,7 @@ return \ls, warn ->
 		return args
 
 
-	var parse_assignment
-	parse_assignment = \lhs, v, vk ->
+	let parse_assignment = \lhs, v, vk ->
 		if vk ~= Kind.Var and vk ~= Kind.Field and vk ~= Kind.Index
 			err_symbol()
 
@@ -429,6 +428,16 @@ return \ls, warn ->
 		if lex_opt('=')
 			rhs = expr_list()
 		return Stmt.local(lhs, rhs, loc)
+
+	var parse_let = \loc ->
+		var vars, i = {}, 0
+		do
+			i = i + 1
+			vars[i] = Expr.id(lex_str())
+		until not lex_opt(',')
+		lex_check('=')
+		var rhs = expr_list()
+		return Stmt.let(vars, rhs, loc)
 
 
 	var parse_while = \loc ->
@@ -490,8 +499,7 @@ return \ls, warn ->
 
 	-- Parse one statement
 	-- Returns the statement AST and a bool to indicate if it must be the last one in a chunk
-	var parse_stmt
-	parse_stmt = ->
+	let parse_stmt = ->
 		var loc = ls.loc()
 		var stmt
 		if ls.token == 'TK_if'
@@ -513,6 +521,9 @@ return \ls, warn ->
 		else if ls.token == 'TK_name' and ls.value == 'var' and ls.next() == 'TK_name'
 			ls.step()
 			stmt = parse_var(loc)
+		else if ls.token == 'TK_name' and ls.value == 'let' and ls.next() == 'TK_name'
+			ls.step()
+			stmt = parse_let(loc)
 		else if ls.token == 'TK_local'
 			err_symbol()
 			ls.step()
@@ -536,7 +547,7 @@ return \ls, warn ->
 
 
 	-- Parse list of statements
-	var parse_stmts = ->
+	let parse_stmts = ->
 		var stmt, islast = nil, false
 		var body, b = {}, 0
 		while not islast and not EndOfBlock[ls.token]

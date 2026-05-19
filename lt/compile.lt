@@ -1,13 +1,13 @@
-var term = require('term')
-var reader = require('lt.read')
-var lex = require('lt.lex')
-var scope = require('lt.scope')
-var parse = require('lt.parse')
-var check = require('lt.check')
-var transform = require('lt.transform')
-var generate = require('lt.generate')
+let term = require('term')
+let reader = require('lt.read')
+let lex = require('lt.lex')
+let scope = require('lt.scope')
+let parse = require('lt.parse')
+let check = require('lt.check')
+let transform = require('lt.transform')
+let generate = require('lt.generate')
 
-var Circular = {}
+let Circular = {}
 
 var split_lines = \src ->
 	var out = {}

@@ -7,10 +7,10 @@ local solve = require("lt.solve")
 local TStmt = Tag.Stmt
 local TExpr = Tag.Expr
 local TType = Tag.Type
-local relational = function(op)
+local relational; relational = function(op)
     return op == ">" or op == ">=" or op == "<" or op == "<=" or op == "==" or op == "~="
 end
-local arithmetic = function(op)
+local arithmetic; arithmetic = function(op)
     return op == "+" or op == "-" or op == "*" or op == "/" or op == "^"
 end
 return function(scope, stmts, warn, import, typecheck)
@@ -471,6 +471,21 @@ return function(scope, stmts, warn, import, typecheck)
             declare(var, solv.extend(new(), rtypes[i] or ty["nil"]()))
         end
     end
+    Stmt[TStmt.Let] = function(node)
+        balance_check(node.vars, node.exprs)
+        local placeholders = {}
+        for i, lvar in ipairs(node.vars) do
+            local ph = new()
+            placeholders[i] = ph
+            declare(lvar, ph)
+        end
+        local rtypes = with_lvl(1, infer_exprs, node.exprs)
+        for i, lvar in ipairs(node.vars) do
+            local rtype = rtypes[i] or ty["nil"]()
+            solv.extend(placeholders[i], rtype)
+            scope.set_const(maybe_self(lvar.name))
+        end
+    end
     local assign_field = function(node, otype, field, rtype)
         local tytys = {{rtype, field}}
         local ok = solv.constrain(ty.tbl(tytys), otype)
@@ -507,6 +522,9 @@ return function(scope, stmts, warn, import, typecheck)
             local rtype = rtypes[i] or ty["nil"]()
             local ltype
             if n.tag == TExpr.Id then
+                if scope.is_const(maybe_self(n.name)) then
+                    warn(n.line, n.col, 2, "cannot reassign `let`-bound const `" .. n.name .. "`")
+                end
                 ltype = declared_type(n) or infer_expr(n)
                 if not solv.constrain(rtype, ltype) then
                     if ltype.tag == TType.New then

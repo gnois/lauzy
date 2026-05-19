@@ -383,8 +383,7 @@ return function(ls, warn)
         lex_match(")", "(", line)
         return args
     end
-    local parse_assignment
-    parse_assignment = function(lhs, v, vk)
+    local parse_assignment; parse_assignment = function(lhs, v, vk)
         if vk ~= Kind.Var and vk ~= Kind.Field and vk ~= Kind.Index then
             err_symbol()
         end
@@ -417,6 +416,16 @@ return function(ls, warn)
             rhs = expr_list()
         end
         return Stmt["local"](lhs, rhs, loc)
+    end
+    local parse_let = function(loc)
+        local vars, i = {}, 0
+        repeat
+            i = i + 1
+            vars[i] = Expr.id(lex_str())
+        until not lex_opt(",")
+        lex_check("=")
+        local rhs = expr_list()
+        return Stmt.let(vars, rhs, loc)
     end
     local parse_while = function(loc)
         ls.step()
@@ -472,8 +481,7 @@ return function(ls, warn)
         local name = lex_str()
         return Stmt["goto"](name, loc)
     end
-    local parse_stmt
-    parse_stmt = function()
+    local parse_stmt; parse_stmt = function()
         local loc = ls.loc()
         local stmt
         if ls.token == "TK_if" then
@@ -493,6 +501,9 @@ return function(ls, warn)
         elseif ls.token == "TK_name" and ls.value == "var" and ls.next() == "TK_name" then
             ls.step()
             stmt = parse_var(loc)
+        elseif ls.token == "TK_name" and ls.value == "let" and ls.next() == "TK_name" then
+            ls.step()
+            stmt = parse_let(loc)
         elseif ls.token == "TK_local" then
             err_symbol()
             ls.step()
@@ -514,7 +525,7 @@ return function(ls, warn)
         end
         return stmt, false
     end
-    local parse_stmts = function()
+    local parse_stmts; parse_stmts = function()
         local stmt, islast = nil, false
         local body, b = {}, 0
         while not islast and not EndOfBlock[ls.token] do

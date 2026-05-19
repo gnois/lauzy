@@ -108,7 +108,7 @@ if src
 		for k in pairs(imports)
 			table.insert(import_keys, k)
 		table.sort(import_keys)
-		for _, k in ipairs(import_keys)
+		for __, k in ipairs(import_keys)
 			var file = imports[k]
 			-- construct output file path
 			var dest = dst

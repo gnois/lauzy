@@ -1,18 +1,18 @@
-var Tag = require('lt.tag')
-var reserved = require('lt.reserved')
-var operator = require('lt.operator')
-var chars = require('lt.chars')
+let Tag = require('lt.tag')
+let reserved = require('lt.reserved')
+let operator = require('lt.operator')
+let chars = require('lt.chars')
 
-var TStmt = Tag.Stmt
-var TExpr = Tag.Expr
-var Keyword = reserved.Keyword
-var format = string.format
-var concat = table.concat
-var is = chars.is
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
+let Keyword = reserved.Keyword
+let format = string.format
+let concat = table.concat
+let is = chars.is
 
 
 var generate = \stmts ->
-	
+
 	var Stmt = {}
 	var Expr = {}
 	var dent = -1
@@ -118,7 +118,7 @@ var generate = \stmts ->
 		var hash = {}
 		var last = #node.valkeys
 		var more = last > 5 and indent(1) or ""
-		
+
 		for i = 1, last
 			var vk = node.valkeys[i]
 			var val = emit_expr(vk[1])
@@ -128,7 +128,7 @@ var generate = \stmts ->
 					hash[i] = format("%s = %s", key.value, val)
 				else
 					hash[i] = format("[%s] = %s", emit_expr(key), val)
-			
+
 			else
 				if i == last and vk[1].bracketed
 					hash[i] = "(" .. val .. ")"
@@ -168,9 +168,9 @@ var generate = \stmts ->
 	Expr[TExpr.Unary] = \node ->
 		var a, arg_prio = emit_expr(node.right)
 		var op_prio = operator.unary_priority
-		if arg_prio < op_prio a = format("(%s)", a) 
+		if arg_prio < op_prio a = format("(%s)", a)
 		var op = node.op
-		if op == 'not' op = 'not ' 
+		if op == 'not' op = 'not '
 		return format("%s%s", op, a), operator.unary_priority
 
 	Expr[TExpr.Binary] = \node ->
@@ -179,8 +179,8 @@ var generate = \stmts ->
 		var rprio = operator.right_priority(oper)
 		var a, alprio, arprio = emit_expr(node.left)
 		var b, blprio, brprio = emit_expr(node.right)
-		if not arprio arprio = alprio 
-		if not brprio brprio = blprio 
+		if not arprio arprio = alprio
+		if not brprio brprio = blprio
 		var ap = arprio <  lprio and format("(%s)", a) or a
 		var bp = blprio <= rprio and format("(%s)", b) or b
 		return format("%s %s %s", ap, oper, bp), lprio, rprio
@@ -195,6 +195,19 @@ var generate = \stmts ->
 		if #node.exprs > 0
 			return line .. " = " ..  emit_exprs(node.exprs)
 		return line
+
+	Stmt[TStmt.Let] = \node ->
+		var ns = emit_params(node.vars)
+		var rhs = emit_exprs(node.exprs)
+		-- use 2-statement form if any RHS is a function so all names are in scope for self/mutual reference
+		var has_func = false
+		for _, e in ipairs(node.exprs)
+			if e.tag == TExpr.Function
+				has_func = true
+				break
+		if has_func
+			return "local " .. ns .. "; " .. ns .. " = " .. rhs
+		return "local " .. ns .. " = " .. rhs
 
 	Stmt[TStmt.Assign] = \node ->
 		return emit_exprs(node.lefts) .. " = " .. emit_exprs(node.rights)

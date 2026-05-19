@@ -2,8 +2,7 @@
 -- Generated from type.lt
 --
 local Tag = require("lt.tag")
-local same
-same = function(a, b, seen)
+local same; same = function(a, b, seen)
     if a == b then
         return true
     end
@@ -55,8 +54,7 @@ same = function(a, b, seen)
     end
     return true
 end
-local clone
-clone = function(t, seen)
+local clone; clone = function(t, seen)
     seen = seen or {}
     if type(t) == "table" then
         if seen[t] then
@@ -75,7 +73,7 @@ clone = function(t, seen)
     return t
 end
 local TType = Tag.Type
-local get_tbl = function(t)
+local get_tbl; get_tbl = function(t)
     local tbl = t
     if t.tag == TType.Or then
         for _, v in ipairs(t) do
@@ -181,8 +179,7 @@ local varargs = function(t)
     t.varargs = true
     return t
 end
-local simplify
-simplify = function(node, seen)
+local simplify; simplify = function(node, seen)
     seen = seen or {}
     if not node or "table" ~= type(node) then
         return node

@@ -3,6 +3,7 @@ return {
 	Stmt = {
 		Expr = 'Expr'
 		, Local = 'Local'
+		, Let = 'Let'  -- recursive const binding
 		, Assign = 'Assign'
 		, Do = 'Do'
 		, If = 'If'

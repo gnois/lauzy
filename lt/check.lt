@@ -1,15 +1,15 @@
-var ty = require('lt.type')
-var Tag = require('lt.tag')
-var solve = require('lt.solve')
-var TStmt = Tag.Stmt
-var TExpr = Tag.Expr
-var TType = Tag.Type
+let ty = require('lt.type')
+let Tag = require('lt.tag')
+let solve = require('lt.solve')
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
+let TType = Tag.Type
 
 
-var relational = \op ->
+let relational = \op ->
 	return op == '>' or op == '>=' or op == '<' or op == '<=' or op == '==' or op == '~='
 
-var arithmetic = \op ->
+let arithmetic = \op ->
 	return op == '+' or op == '-' or op == '*' or op == '/' or op == '^'
 
 return \scope, stmts, warn, import, typecheck ->
@@ -431,6 +431,21 @@ return \scope, stmts, warn, import, typecheck ->
 		for i, var in ipairs(node.vars)
 			declare(var, solv.extend(new(), rtypes[i] or ty.nil()))
 
+	-- let: pre-declare name before inferring RHS so recursive references resolve
+	Stmt[TStmt.Let] = \node ->
+		balance_check(node.vars, node.exprs)
+		-- pre-declare all names before inferring RHS so lambdas can self/mutually reference
+		var placeholders = {}
+		for i, lvar in ipairs(node.vars)
+			var ph = new()
+			placeholders[i] = ph
+			declare(lvar, ph)
+		var rtypes = with_lvl(1, infer_exprs, node.exprs)
+		for i, lvar in ipairs(node.vars)
+			var rtype = rtypes[i] or ty.nil()
+			solv.extend(placeholders[i], rtype)
+			scope.set_const(maybe_self(lvar.name))
+
 
 	var assign_field = \node, otype, field, rtype ->
 		var tytys = {
@@ -469,6 +484,8 @@ return \scope, stmts, warn, import, typecheck ->
 			var rtype = rtypes[i] or ty.nil()
 			var ltype
 			if n.tag == TExpr.Id
+				if scope.is_const(maybe_self(n.name))
+					warn(n.line, n.col, 2, "cannot reassign `let`-bound const `" .. n.name .. "`")
 				ltype = declared_type(n) or infer_expr(n)
 				-- warn if reassignment of different type
 				-- check(ltype, rtype, n, "assigment ")

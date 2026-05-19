@@ -35,6 +35,24 @@ return function(decls, warn)
         end
         return false
     end
+    local set_const = function(name)
+        for i = vtop, 1, -1 do
+            local v = vstack[i]
+            if v.name == name then
+                v.const = true
+                return 
+            end
+        end
+    end
+    local is_const = function(name)
+        for i = vtop, 1, -1 do
+            local v = vstack[i]
+            if v.name == name then
+                return v.const
+            end
+        end
+        return false
+    end
     local new_var = function(name, vtype, line, col)
         assert(type(name) == "string")
         assert(type(line) == "number")
@@ -52,7 +70,14 @@ return function(decls, warn)
             warn(line, col, 1, msg)
         end
         vtop = vtop + 1
-        vstack[vtop] = {name = name, type = vtype, used = false, line = line, col = col}
+        vstack[vtop] = {
+            name = name
+            , type = vtype
+            , used = false
+            , line = line
+            , col = col
+            , const = false
+        }
         return vtop
     end
     local new_break = function(line, col)
@@ -142,8 +167,7 @@ return function(decls, warn)
                 end
             end
         end
-        local test_goto
-        test_goto = function(blocks, lbl)
+        local test_goto; test_goto = function(blocks, lbl)
             for _, b in ipairs(blocks) do
                 if b.blocks then
                     test_goto(b.blocks, lbl)
@@ -206,8 +230,7 @@ return function(decls, warn)
     local end_func = function()
         local this = bptr
         leave_block()
-        local unused_goto
-        unused_goto = function(block)
+        local unused_goto; unused_goto = function(block)
             if block.golas then
                 for __, gl in ipairs(block.golas) do
                     if gl.go and not gl.match then
@@ -251,6 +274,8 @@ return function(decls, warn)
         , declared = declared
         , update_var = update_var
         , new_var = new_var
+        , set_const = set_const
+        , is_const = is_const
         , new_goto = new_goto
         , new_label = new_label
         , new_break = new_break

@@ -42,8 +42,7 @@ return function()
         list[#list + 1] = t
         return true
     end
-    local coalesce
-    coalesce = function(node, pol, seen)
+    local coalesce; coalesce = function(node, pol, seen)
         pol = pol ~= false
         seen = seen or {}
         if not node then
@@ -136,8 +135,7 @@ return function()
         end
         return "nil"
     end
-    local subst
-    subst = function(node, tvar, texp)
+    local subst; subst = function(node, tvar, texp)
         assert(tvar.tag == TType.New)
         if not node or "table" ~= type(node) then
             return node
@@ -171,8 +169,7 @@ return function()
         end
         return node
     end
-    local apply
-    apply = function(node)
+    local apply; apply = function(node)
         if not node or "table" ~= type(node) then
             return node
         end
@@ -202,8 +199,7 @@ return function()
         end
         return node
     end
-    local occurs
-    occurs = function(x, y, seen)
+    local occurs; occurs = function(x, y, seen)
         y = apply(y)
         if not y then
             return false
@@ -378,8 +374,7 @@ return function()
         end
         return true
     end
-    local level_of
-    level_of = function(node)
+    local level_of; level_of = function(node)
         node = apply(node)
         if not node then
             return 0
@@ -413,8 +408,7 @@ return function()
         end
         return 0
     end
-    local extrude
-    extrude = function(node, pol, lim, cache)
+    local extrude; extrude = function(node, pol, lim, cache)
         node = apply(node)
         cache = cache or {}
         if not node then
@@ -475,8 +469,7 @@ return function()
         lim = lim or 0
         to_lvl = to_lvl or lim
         local freshened = {}
-        local rec
-        rec = function(node)
+        local rec; rec = function(node)
             node = apply(node)
             if node.tag == TType.New then
                 ensure_var(node)
