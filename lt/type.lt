@@ -272,9 +272,20 @@ Str[TType.Tbl] = \t ->
 		out[o] = val
 	return '{' .. table.concat(out, ', ') .. '}'
 Str[TType.Or] = \t ->
-	var list = {}
-	for i, x in ipairs(t)
-		list[i] = render(x, Prec[TType.Or])
+	var list, seen = {}, {}
+	let collect = \node ->
+		if node.tag == TType.Or
+			for _, x in ipairs(node)
+				collect(x)
+		else if node.tag == TType.Tuple and #node == 1
+			collect(node[1])
+		else
+			var s = render(node, Prec[TType.Or])
+			if not seen[s]
+				seen[s] = true
+				list[#list + 1] = s
+	for _, x in ipairs(t)
+		collect(x)
 	return table.concat(list, '|')
 Str[TType.And] = \t ->
 	var list = {}

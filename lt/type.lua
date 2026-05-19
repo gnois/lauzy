@@ -306,9 +306,24 @@ Str[TType.Tbl] = function(t)
     return "{" .. table.concat(out, ", ") .. "}"
 end
 Str[TType.Or] = function(t)
-    local list = {}
-    for i, x in ipairs(t) do
-        list[i] = render(x, Prec[TType.Or])
+    local list, seen = {}, {}
+    local collect; collect = function(node)
+        if node.tag == TType.Or then
+            for _, x in ipairs(node) do
+                collect(x)
+            end
+        elseif node.tag == TType.Tuple and #node == 1 then
+            collect(node[1])
+        else
+            local s = render(node, Prec[TType.Or])
+            if not seen[s] then
+                seen[s] = true
+                list[#list + 1] = s
+            end
+        end
+    end
+    for _, x in ipairs(t) do
+        collect(x)
     end
     return table.concat(list, "|")
 end
