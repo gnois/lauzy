@@ -1,6 +1,6 @@
-var ty = require('lt.type')
-var Tag = require('lt.tag')
-var TType = Tag.Type
+let ty = require('lt.type')
+let Tag = require('lt.tag')
+let TType = Tag.Type
 
 return ->
 	-- list of type var to type expr
@@ -37,8 +37,7 @@ return ->
 		return true
 
 
-	var coalesce
-	coalesce = \node, pol, seen ->
+	let coalesce = \node, pol, seen ->
 		pol = pol ~= false
 		seen = seen or {}
 		if not node
@@ -131,8 +130,7 @@ return ->
 		return "nil"
 
 	------ subst in place --------------
-	var subst
-	subst = \node, tvar, texp ->
+	let subst = \node, tvar, texp ->
 		assert(tvar.tag == TType.New)
 		if not node or "table" ~= type(node)
 			return node
@@ -159,8 +157,7 @@ return ->
 
 
 	------ apply in place --------------
-	var apply
-	apply = \node ->
+	let apply = \node ->
 		if not node or "table" ~= type(node)
 			return node
 		if node.tag == TType.New
@@ -184,8 +181,7 @@ return ->
 
 
 	------ occur --------------
-	var occurs
-	occurs = \x, y, seen ->
+	let occurs = \x, y, seen ->
 		y = apply(y)
 		if not y
 			return false
@@ -326,8 +322,7 @@ return ->
 				return false, err
 		return true
 
-	var level_of
-	level_of = \node ->
+	let level_of = \node ->
 		node = apply(node)
 		if not node
 			return 0
@@ -352,8 +347,7 @@ return ->
 			return level_of(node[1])
 		return 0
 
-	var extrude
-	extrude = \node, pol, lim, cache ->
+	let extrude = \node, pol, lim, cache ->
 		node = apply(node)
 		cache = cache or {}
 		if not node
@@ -406,8 +400,7 @@ return ->
 		to_lvl = to_lvl or lim
 		var freshened = {}
 
-		var rec
-		rec = \node ->
+		let rec = \node ->
 			node = apply(node)
 			if node.tag == TType.New
 				ensure_var(node)

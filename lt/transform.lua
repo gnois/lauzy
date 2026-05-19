@@ -102,6 +102,11 @@ return function(stmts)
         node.exprs = visit_exprs(node.exprs)
         return node
     end
+    Stmt[TStmt.Let] = function(node)
+        node.vars = visit_exprs(node.vars)
+        node.exprs = visit_exprs(node.exprs)
+        return node
+    end
     Stmt[TStmt.Assign] = function(node)
         node.lefts = visit_exprs(node.lefts)
         node.rights = visit_exprs(node.rights)

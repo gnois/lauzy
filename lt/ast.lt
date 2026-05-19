@@ -1,10 +1,10 @@
-var Tag = require('lt.tag')
+let Tag = require('lt.tag')
 
-var TStmt = Tag.Stmt
-var TExpr = Tag.Expr
-var TType = Tag.Type
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
+let TType = Tag.Type
 
-var make = \tag, node, loc ->
+let make = \tag, node, loc ->
 	assert('table' == type(node))
 	assert('number' == type(loc.line))
 	assert('number' == type(loc.col))
@@ -22,6 +22,9 @@ var Statement = {
 
 	, local = \vars, exprs, ls ->
 		return make(TStmt.Local, {vars = vars, exprs = exprs}, ls)
+
+	, let = \vars, exprs, ls ->
+		return make(TStmt.Let, {vars = vars, exprs = exprs}, ls)
 
 	, do = \body, ls ->
 		return make(TStmt.Do, {body = body}, ls)

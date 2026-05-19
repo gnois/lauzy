@@ -5,7 +5,7 @@ local Tag = require("lt.tag")
 local TStmt = Tag.Stmt
 local TExpr = Tag.Expr
 local TType = Tag.Type
-local make = function(tag, node, loc)
+local make; make = function(tag, node, loc)
     assert("table" == type(node))
     assert("number" == type(loc.line))
     assert("number" == type(loc.col))
@@ -23,6 +23,9 @@ local Statement = {
     end
     , ["local"] = function(vars, exprs, ls)
         return make(TStmt.Local, {vars = vars, exprs = exprs}, ls)
+    end
+    , let = function(vars, exprs, ls)
+        return make(TStmt.Let, {vars = vars, exprs = exprs}, ls)
     end
     , ["do"] = function(body, ls)
         return make(TStmt.Do, {body = body}, ls)

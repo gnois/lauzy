@@ -1,9 +1,9 @@
-var ast = require('lt.ast')
-var Tag = require('lt.tag')
-var TStmt = Tag.Stmt
-var TExpr = Tag.Expr
+let ast = require('lt.ast')
+let Tag = require('lt.tag')
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
 
-var id = ast.Expr.id
+let id = ast.Expr.id
 
 return \stmts ->
 
@@ -102,6 +102,11 @@ return \stmts ->
 		return node
 
 	Stmt[TStmt.Local] = \node ->
+		node.vars = visit_exprs(node.vars)
+		node.exprs = visit_exprs(node.exprs)
+		return node
+
+	Stmt[TStmt.Let] = \node ->
 		node.vars = visit_exprs(node.vars)
 		node.exprs = visit_exprs(node.exprs)
 		return node

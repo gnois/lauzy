@@ -110,7 +110,7 @@ if src then
             table.insert(import_keys, k)
         end
         table.sort(import_keys)
-        for _, k in ipairs(import_keys) do
+        for __, k in ipairs(import_keys) do
             local file = imports[k]
             local dest = dst
             if not single then

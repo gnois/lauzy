@@ -223,6 +223,21 @@ local generate = function(stmts)
         end
         return line
     end
+    Stmt[TStmt.Let] = function(node)
+        local ns = emit_params(node.vars)
+        local rhs = emit_exprs(node.exprs)
+        local has_func = false
+        for _, e in ipairs(node.exprs) do
+            if e.tag == TExpr.Function then
+                has_func = true
+                break
+            end
+        end
+        if has_func then
+            return "local " .. ns .. "; " .. ns .. " = " .. rhs
+        end
+        return "local " .. ns .. " = " .. rhs
+    end
     Stmt[TStmt.Assign] = function(node)
         return emit_exprs(node.lefts) .. " = " .. emit_exprs(node.rights)
     end

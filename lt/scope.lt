@@ -1,14 +1,14 @@
-var reserved = require('lt.reserved')
-var Builtin = reserved.Builtin
+let reserved = require('lt.reserved')
+let Builtin = reserved.Builtin
 
-var unused = {
+let unused = {
 	_ = true
 	, __ = true
 	, ___ = true
 }
 
-var Function = 'Function'
-var Loop = {
+let Function = 'Function'
+let Loop = {
 	While = 'While'
 	, Repeat = 'Repeat'
 	, ForIn = 'ForIn'
@@ -43,6 +43,20 @@ return \decls, warn ->
 				return true
 		return false
 
+	var set_const = \name ->
+		for i = vtop, 1, -1
+			var v = vstack[i]
+			if v.name == name
+				v.const = true
+				return
+
+	var is_const = \name ->
+		for i = vtop, 1, -1
+			var v = vstack[i]
+			if v.name == name
+				return v.const
+		return false
+
 	-- reports shadowing variable
 	var new_var = \name, vtype, line, col ->
 		assert(type(name) == 'string')
@@ -58,7 +72,7 @@ return \decls, warn ->
 				msg = msg .. " on line " .. ln
 			warn(line, col, 1, msg)
 		vtop = vtop + 1
-		vstack[vtop] = { name = name, type = vtype, used = false, line = line, col = col }
+		vstack[vtop] = { name = name, type = vtype, used = false, line = line, col = col, const = false }
 		return vtop
 
 	-- Note: loop block tags must be spelled correctly
@@ -76,7 +90,7 @@ return \decls, warn ->
 
 	-- Jumping to any labels at the end of block is allowed in Lua
 	-- But LuaJIT considers semicolon after label as non label statement, and error out
-	
+
 	-- solves forward jump
 	var find_goto = \golas, lbl ->
 		for _, g in ipairs(golas)
@@ -85,7 +99,7 @@ return \decls, warn ->
 					warn(g.line, g.col, 2, "goto <" .. g.go .. "> jumps over variable '" .. vstack[lbl.vtop].name .. "' declared at line " .. vstack[lbl.vtop].line)
 				g.match = true
 				lbl.used = true
-				-- continue loop in case there are multiple gotos 
+				-- continue loop in case there are multiple gotos
 
 	-- solves backward jump
 	var find_label = \golas, go ->
@@ -102,7 +116,7 @@ return \decls, warn ->
 		assert(type(col) == 'number')
 		if not bptr.golas
 			bptr.golas = {}
-		
+
 		-- report duplicate label in current scopes
 		var blk = bptr
 		var severity = 2
@@ -115,7 +129,7 @@ return \decls, warn ->
 						break
 			blk = blk.outer
 			severity = 1
-		
+
 		var label = { label = name, used = false, line = line, col = col, vtop = vtop }
 		find_goto(bptr.golas, label)
 		table.insert(bptr.golas, label)
@@ -142,7 +156,7 @@ return \decls, warn ->
 			, blocks = nil        -- child blocks in this block
 			, golas = nil         -- list of gotos and labels
 		}
-		
+
 		-- add to outer
 		if bptr
 			if not bptr.blocks
@@ -158,10 +172,9 @@ return \decls, warn ->
 			if not v.used
 				if not unused[v.name]
 					warn(v.line, v.col, 1, "unused variable `" .. v.name .. "`")
-	
+
 		-- recursively check inner scope goto with this label
-		var test_goto
-		test_goto = \blocks, lbl ->
+		let test_goto = \blocks, lbl ->
 			for _, b in ipairs(blocks)
 				if b.blocks
 					test_goto(b.blocks, lbl)
@@ -215,15 +228,14 @@ return \decls, warn ->
 	-- functions are blocks
 	var begin_func = ->
 		enter_block(Function)
-		
+
 	-- function block is thrown away when leaving scope
 	var end_func = ->
 		var this = bptr
 		leave_block()
-		
+
 		-- report unmatched gotos
-		var unused_goto
-		unused_goto = \block ->
+		let unused_goto = \block ->
 			if block.golas
 				for __, gl in ipairs(block.golas)
 					if gl.go and not gl.match
@@ -246,7 +258,7 @@ return \decls, warn ->
 		, enter_fornum = -> enter_block(Loop.ForNum)
 		, enter = -> enter_block()
 		, leave = -> leave_block()
-		
+
 		, varargs = varargs
 		, is_varargs = is_varargs
 		, set_returns = set_returns
@@ -254,6 +266,8 @@ return \decls, warn ->
 		, declared = declared
 		, update_var = update_var
 		, new_var = new_var
+		, set_const = set_const
+		, is_const = is_const
 		, new_goto = new_goto
 		, new_label = new_label
 		, new_break = new_break

@@ -1,7 +1,6 @@
-var Tag = require('lt.tag')
+let Tag = require('lt.tag')
 -- check if ast are the same
-var same
-same = \a, b, seen ->
+let same = \a, b, seen ->
 	if a == b
 		return true
 	if type(a) ~= type(b)
@@ -46,8 +45,7 @@ same = \a, b, seen ->
 	return true
 
 
-var clone
-clone = \t, seen ->
+let clone = \t, seen ->
 	seen = seen or {}
 	if type(t) == "table"
 		if seen[t]
@@ -63,10 +61,10 @@ clone = \t, seen ->
 	return t
 
 
-var TType = Tag.Type
+let TType = Tag.Type
 -- return the tbl or union of tbl, ...
 -- else nil
-var get_tbl = \t ->
+let get_tbl = \t ->
 	var tbl = t
 	if t.tag == TType.Or
 		for _, v in ipairs(t)
@@ -156,8 +154,7 @@ var varargs = \t ->
 	t.varargs = true
 	return t
 
-var simplify
-simplify = \node, seen ->
+let simplify = \node, seen ->
 	seen = seen or {}
 	if not node or "table" ~= type(node)
 		return node
