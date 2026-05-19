@@ -130,7 +130,7 @@ return ->
 		return "nil"
 
 	------ subst in place --------------
-	let subst = \node, tvar, texp ->
+	let subst = \node, tvar, texp, seen ->
 		assert(tvar.tag == TType.New)
 		if not node or "table" ~= type(node)
 			return node
@@ -138,45 +138,53 @@ return ->
 			if node.id == tvar.id
 				return texp
 			return node
+		seen = seen or {}
+		if seen[node]
+			return node
+		seen[node] = true
 		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
 			for i = 1, #node
-				node[i] = subst(node[i], tvar, texp)
+				node[i] = subst(node[i], tvar, texp, seen)
 			return node
 		if node.tag == TType.Func
-			node.ins = subst(node.ins, tvar, texp)
-			node.outs = subst(node.outs, tvar, texp)
+			node.ins = subst(node.ins, tvar, texp, seen)
+			node.outs = subst(node.outs, tvar, texp, seen)
 			return node
 		if node.tag == TType.Tbl
 			for i = 1, #node
-				node[i] = { subst(node[i][1], tvar, texp), node[i][2] and subst(node[i][2], tvar, texp) }
+				node[i] = { subst(node[i][1], tvar, texp, seen), node[i][2] and subst(node[i][2], tvar, texp, seen) }
 			return node
 		if node.tag == TType.Neg
-			node[1] = subst(node[1], tvar, texp)
+			node[1] = subst(node[1], tvar, texp, seen)
 			return node
 		return node
 
 
 	------ apply in place --------------
-	let apply = \node ->
+	let apply = \node, seen ->
 		if not node or "table" ~= type(node)
 			return node
 		if node.tag == TType.New
 			ensure_var(node)
 			return subs[node.id] or node
+		seen = seen or {}
+		if seen[node]
+			return node
+		seen[node] = true
 		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
 			for i = 1, #node
-				node[i] = apply(node[i])
+				node[i] = apply(node[i], seen)
 			return node
 		if node.tag == TType.Func
-			node.ins = apply(node.ins)
-			node.outs = apply(node.outs)
+			node.ins = apply(node.ins, seen)
+			node.outs = apply(node.outs, seen)
 			return node
 		if node.tag == TType.Tbl
 			for i = 1, #node
-				node[i] = { apply(node[i][1]), node[i][2] and apply(node[i][2]) }
+				node[i] = { apply(node[i][1], seen), node[i][2] and apply(node[i][2], seen) }
 			return node
 		if node.tag == TType.Neg
-			return ty.keep_varargs(node, ty.neg(apply(node[1])))
+			return ty.keep_varargs(node, ty.neg(apply(node[1], seen)))
 		return node
 
 

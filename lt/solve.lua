@@ -135,7 +135,7 @@ return function()
         end
         return "nil"
     end
-    local subst; subst = function(node, tvar, texp)
+    local subst; subst = function(node, tvar, texp, seen)
         assert(tvar.tag == TType.New)
         if not node or "table" ~= type(node) then
             return node
@@ -146,30 +146,35 @@ return function()
             end
             return node
         end
+        seen = seen or {}
+        if seen[node] then
+            return node
+        end
+        seen[node] = true
         if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
             for i = 1, #node do
-                node[i] = subst(node[i], tvar, texp)
+                node[i] = subst(node[i], tvar, texp, seen)
             end
             return node
         end
         if node.tag == TType.Func then
-            node.ins = subst(node.ins, tvar, texp)
-            node.outs = subst(node.outs, tvar, texp)
+            node.ins = subst(node.ins, tvar, texp, seen)
+            node.outs = subst(node.outs, tvar, texp, seen)
             return node
         end
         if node.tag == TType.Tbl then
             for i = 1, #node do
-                node[i] = {subst(node[i][1], tvar, texp), node[i][2] and subst(node[i][2], tvar, texp)}
+                node[i] = {subst(node[i][1], tvar, texp, seen), node[i][2] and subst(node[i][2], tvar, texp, seen)}
             end
             return node
         end
         if node.tag == TType.Neg then
-            node[1] = subst(node[1], tvar, texp)
+            node[1] = subst(node[1], tvar, texp, seen)
             return node
         end
         return node
     end
-    local apply; apply = function(node)
+    local apply; apply = function(node, seen)
         if not node or "table" ~= type(node) then
             return node
         end
@@ -177,25 +182,30 @@ return function()
             ensure_var(node)
             return subs[node.id] or node
         end
+        seen = seen or {}
+        if seen[node] then
+            return node
+        end
+        seen[node] = true
         if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
             for i = 1, #node do
-                node[i] = apply(node[i])
+                node[i] = apply(node[i], seen)
             end
             return node
         end
         if node.tag == TType.Func then
-            node.ins = apply(node.ins)
-            node.outs = apply(node.outs)
+            node.ins = apply(node.ins, seen)
+            node.outs = apply(node.outs, seen)
             return node
         end
         if node.tag == TType.Tbl then
             for i = 1, #node do
-                node[i] = {apply(node[i][1]), node[i][2] and apply(node[i][2])}
+                node[i] = {apply(node[i][1], seen), node[i][2] and apply(node[i][2], seen)}
             end
             return node
         end
         if node.tag == TType.Neg then
-            return ty.keep_varargs(node, ty.neg(apply(node[1])))
+            return ty.keep_varargs(node, ty.neg(apply(node[1], seen)))
         end
         return node
     end
