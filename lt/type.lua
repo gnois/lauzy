@@ -135,6 +135,33 @@ local keep_varargs = function(src, dst)
     end
     return dst
 end
+local compound_type; compound_type = function(tag, parts)
+    local absorber = tag == TType.Or and TType.Top or TType.Bot
+    local identity = tag == TType.Or and TType.Bot or TType.Top
+    local filtered = {}
+    for _, a in ipairs(parts) do
+        if a.tag == absorber then
+            return create(absorber, {})
+        end
+        if a.tag == TType.Neg then
+            for __, b in ipairs(parts) do
+                if same(a[1], b) then
+                    return create(absorber, {})
+                end
+            end
+        end
+        if a.tag ~= identity then
+            filtered[#filtered + 1] = a
+        end
+    end
+    if #filtered == 1 then
+        return filtered[1]
+    end
+    if #filtered == 0 then
+        return create(identity, {})
+    end
+    return create(tag, filtered)
+end
 local Type = {
     ["nil"] = function()
         return create(TType.Nil, {})
@@ -157,11 +184,11 @@ local Type = {
     , tbl = function(typetypes)
         return create(TType.Tbl, typetypes)
     end
-    , ["or"] = function(...)
-        return create(TType.Or, flatten(TType.Or, {...}))
+    , ["or"] = function(types)
+        return compound_type(TType.Or, flatten(TType.Or, types))
     end
-    , ["and"] = function(...)
-        return create(TType.And, flatten(TType.And, {...}))
+    , ["and"] = function(types)
+        return compound_type(TType.And, flatten(TType.And, types))
     end
     , top = function()
         return create(TType.Top, {})
@@ -201,16 +228,7 @@ local simplify; simplify = function(node, seen)
             end
         end
         flat = dedup(flat)
-        if #flat == 0 then
-            return node
-        end
-        if #flat == 1 then
-            return flat[1]
-        end
-        if node.tag == TType.Or then
-            return keep_varargs(node, Type["or"](unpack(flat)))
-        end
-        return keep_varargs(node, Type["and"](unpack(flat)))
+        return keep_varargs(node, compound_type(node.tag, flat))
     end
     if node.tag == TType.Tuple then
         local out = {}
@@ -286,9 +304,9 @@ end
 Str[TType.Tbl] = function(t)
     local out, o = {}, 1
     local val
-    for _, ty in ipairs(t) do
-        local vty = ty[1]
-        local kty = ty[2]
+    for _, pair in ipairs(t) do
+        local vty = pair[1]
+        local kty = pair[2]
         if kty then
             if "string" == type(kty) then
                 out[o] = kty .. ": " .. render(vty, 3)
@@ -305,35 +323,32 @@ Str[TType.Tbl] = function(t)
     end
     return "{" .. table.concat(out, ", ") .. "}"
 end
-Str[TType.Or] = function(t)
-    local list, seen = {}, {}
-    local collect; collect = function(node)
-        if node.tag == TType.Or then
-            for _, x in ipairs(node) do
-                collect(x)
-            end
-        elseif node.tag == TType.Tuple and #node == 1 then
-            collect(node[1])
-        else
-            local s = render(node, Prec[TType.Or])
-            if not seen[s] then
-                seen[s] = true
-                list[#list + 1] = s
+local flat_renderer = function(own_tag, sep, prec)
+    return function(t)
+        local list, seen = {}, {}
+        local collect; collect = function(node)
+            if node.tag == own_tag then
+                for _, x in ipairs(node) do
+                    collect(x)
+                end
+            elseif node.tag == TType.Tuple and #node == 1 then
+                collect(node[1])
+            else
+                local s = render(node, prec)
+                if not seen[s] then
+                    seen[s] = true
+                    list[#list + 1] = s
+                end
             end
         end
+        for _, x in ipairs(t) do
+            collect(x)
+        end
+        return table.concat(list, sep)
     end
-    for _, x in ipairs(t) do
-        collect(x)
-    end
-    return table.concat(list, "|")
 end
-Str[TType.And] = function(t)
-    local list = {}
-    for i, x in ipairs(t) do
-        list[i] = render(x, Prec[TType.And])
-    end
-    return table.concat(list, "&")
-end
+Str[TType.Or] = flat_renderer(TType.Or, "|", Prec[TType.Or])
+Str[TType.And] = flat_renderer(TType.And, "&", Prec[TType.And])
 Str[TType.Top] = function()
     return "Any"
 end

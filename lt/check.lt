@@ -383,7 +383,7 @@ return \scope, stmts, warn, import, typecheck ->
 		var rtype = infer_expr(node.right)
 		var op = node.op
 		if op == '#'
-			check_op(ty.or(ty.tbl({}), ty.str()), rtype, node, op, node.right)
+			check_op(ty.or({ty.tbl({}), ty.str()}), rtype, node, op, node.right)
 			return ty.num()
 		if op == '-'
 			check_op(ty.num(), rtype, node, op, node.right)
@@ -398,7 +398,7 @@ return \scope, stmts, warn, import, typecheck ->
 		var op = node.op
 		if op == 'and'
 			-- x and y: returns x if falsy, else y; union is a safe over-approximation
-			return ty.or(ltype, rtype)
+			return ty.or({ltype, rtype})
 
 		if arithmetic(op) or relational(op)
 			-- skip equal and not equal, coz they can compare anything
@@ -407,19 +407,19 @@ return \scope, stmts, warn, import, typecheck ->
 					check_op(ty.num(), ltype, node, op, node.left, "left")
 					check_op(ty.num(), rtype, node, op, node.right, "right")
 				else
-					var ordered = ty.or(ty.num(), ty.str())
+					var ordered = ty.or({ty.num(), ty.str()})
 					check_op(ordered, ltype, node, op, node.left, "left")
 					check_op(ordered, rtype, node, op, node.right, "right")
 			if relational(op)
 				return ty.bool()
 		else if op == '..'
-			var strnum = ty.or(ty.num(), ty.str())
+			var strnum = ty.or({ty.num(), ty.str()})
 			-- symmetric check
 			check_op(strnum, rtype, node, op, node.right, "right")
 			check_op(strnum, ltype, node, op, node.left, "left")
 			return ty.str()
 		-- op == 'or'
-		return ty.or(ltype, rtype)
+		return ty.or({ltype, rtype})
 
 	--------- Statements --------------------
 	Stmt[TStmt.Expr] = \node ->
@@ -459,7 +459,7 @@ return \scope, stmts, warn, import, typecheck ->
 				for _, tk in ipairs(tbl)
 					if tk[2] == field
 						-- reassignment of different type to same field
-						tk[1] = ty.or(tk[1], rtype)
+						tk[1] = ty.or({tk[1], rtype})
 						if otype.tag == TType.New
 							solv.extend(otype, t)
 						return
@@ -491,7 +491,7 @@ return \scope, stmts, warn, import, typecheck ->
 				-- check(ltype, rtype, n, "assigment ")
 				if not solv.constrain(rtype, ltype)
 					if ltype.tag == TType.New
-						solv.extend(ltype, ty.or(solv.apply(ltype), rtype))
+						solv.extend(ltype, ty.or({solv.apply(ltype), rtype}))
 			else
 				var ot = infer_expr(n.obj)
 				if check(ty.tbl({}), ot, n, assign_msg(n))
@@ -534,6 +534,14 @@ return \scope, stmts, warn, import, typecheck ->
 			return nil
 		return call.args[1].name, ctor()
 
+	-- detect `x` or `not x` where x is an Id: returns name and whether it is negated
+	var nil_guard = \test ->
+		if test.tag == TExpr.Id
+			return test.name, false
+		if test.tag == TExpr.Unary and test.op == 'not' and test.right.tag == TExpr.Id
+			return test.right.name, true
+		return nil
+
 	Stmt[TStmt.If] = \node ->
 		for i = 1, #node.tests
 			var test = node.tests[i]
@@ -544,12 +552,21 @@ return \scope, stmts, warn, import, typecheck ->
 				var __, orig = scope.declared(gname)
 				var narrowed = gtype
 				if orig
-					narrowed = ty.and(orig, gtype)
+					narrowed = ty.and({orig, gtype})
 				scope.update_var(gname, narrowed)
 				check_block(node.thenss[i])
 				scope.update_var(gname, orig)
 			else
-				check_block(node.thenss[i])
+				-- nil_guard: `if x` narrows x to ~nil in then-branch
+				var nname, negated = nil_guard(test)
+				if nname and not negated
+					var __, orig = scope.declared(nname)
+					if orig
+						scope.update_var(nname, ty.and({orig, ty.neg(ty.nil())}))
+					check_block(node.thenss[i])
+					scope.update_var(nname, orig)
+				else
+					check_block(node.thenss[i])
 		if node.elses
 			-- MLstruct: narrow each guarded variable to the intersection of negations of all guards
 			-- e.g. if type(x)=="num" ... else if type(x)=="str" ... else -> x: ~num & ~str
@@ -564,13 +581,18 @@ return \scope, stmts, warn, import, typecheck ->
 						neg_keys[#neg_keys + 1] = gname
 					else
 						-- intersect: ~A & ~B for same variable
-						neg_map[gname].neg = ty.and(neg_map[gname].neg, ty.neg(gtype))
+						neg_map[gname].neg = ty.and({neg_map[gname].neg, ty.neg(gtype)})
+				else
+					-- nil_guard: `if x` or `if not x` both narrow the else-branch to ~nil
+					var nname = nil_guard(node.tests[i])
+					if nname and not neg_map[nname]
+						var __, orig = scope.declared(nname)
+						neg_map[nname] = { orig = orig, neg = ty.neg(ty.nil()) }
+						neg_keys[#neg_keys + 1] = nname
 			if #neg_keys > 0
 				for _, gname in ipairs(neg_keys)
-					var refined = neg_map[gname].neg
-					if neg_map[gname].orig
-						refined = ty.and(neg_map[gname].orig, neg_map[gname].neg)
-					scope.update_var(gname, refined)
+					var e = neg_map[gname]
+					scope.update_var(gname, e.orig and ty.and({e.orig, e.neg}) or e.neg)
 				check_block(node.elses)
 				for _, gname in ipairs(neg_keys)
 					scope.update_var(gname, neg_map[gname].orig)
@@ -617,7 +639,7 @@ return \scope, stmts, warn, import, typecheck ->
 		var now = ty.tuple(infer_exprs(node.exprs))
 		var prev = scope.get_returns()
 		if prev
-			now = ty.or(prev, now)
+			now = ty.or({prev, now})
 		scope.set_returns(now)
 
 	Stmt[TStmt.Break] = \node ->

@@ -114,6 +114,33 @@ var keep_varargs = \src, dst ->
 		dst.varargs = true
 	return dst
 
+-- Apply lattice laws for Or/And, and unwrap single-element results.
+-- absorber: the short-circuit element (Top for Or, Bot for And)
+-- identity: the element to drop from the list (Bot for Or, Top for And)
+let compound_type = \tag, parts ->
+	var absorber = tag == TType.Or and TType.Top or TType.Bot
+	var identity = tag == TType.Or and TType.Bot or TType.Top
+	var filtered = {}
+	for _, a in ipairs(parts)
+		-- T | Top = Top  /  T & Bot = Bot
+		if a.tag == absorber
+			return create(absorber, {})
+		-- T | ~T = Top  /  T & ~T = Bot  (De Morgan complementation)
+		if a.tag == TType.Neg
+			for __, b in ipairs(parts)
+				if same(a[1], b)
+					return create(absorber, {})
+		-- T | Bot = T  /  T & Top = T  (drop identity elements)
+		if a.tag ~= identity
+			filtered[#filtered + 1] = a
+	-- single-element: unwrap
+	if #filtered == 1
+		return filtered[1]
+	-- empty: return identity element
+	if #filtered == 0
+		return create(identity, {})
+	return create(tag, filtered)
+
 -- table needed, coz some function names are keywords
 var Type = {
 	nil = ->
@@ -135,10 +162,10 @@ var Type = {
 	-- typetypes is array of { type: type } or { name: type }
 	, tbl = \typetypes ->
 		return create(TType.Tbl, typetypes)
-	, or = \... ->
-		return create(TType.Or, flatten(TType.Or, {...}))
-	, and = \... ->
-		return create(TType.And, flatten(TType.And, {...}))
+	, or = \types ->
+		return compound_type(TType.Or, flatten(TType.Or, types))
+	, and = \types ->
+		return compound_type(TType.And, flatten(TType.And, types))
 	-- MLstruct: top, bot, neg type constructors
 	, top = ->
 		return create(TType.Top, {})
@@ -172,13 +199,7 @@ let simplify = \node, seen ->
 			else
 				flat[#flat + 1] = sv
 		flat = dedup(flat)
-		if #flat == 0
-			return node
-		if #flat == 1
-			return flat[1]
-		if node.tag == TType.Or
-			return keep_varargs(node, Type.or(unpack(flat)))
-		return keep_varargs(node, Type.and(unpack(flat)))
+		return keep_varargs(node, compound_type(node.tag, flat))
 
 	if node.tag == TType.Tuple
 		var out = {}
@@ -257,9 +278,9 @@ Str[TType.Func] = \t ->
 Str[TType.Tbl] = \t ->
 	var out, o = {}, 1
 	var val
-	for _, ty in ipairs(t)
-		var vty = ty[1]
-		var kty = ty[2]
+	for _, pair in ipairs(t)
+		var vty = pair[1]
+		var kty = pair[2]
 		if kty
 			if "string" == type(kty)
 				out[o] = kty .. ': ' .. render(vty, 3)
@@ -271,27 +292,27 @@ Str[TType.Tbl] = \t ->
 	if val
 		out[o] = val
 	return '{' .. table.concat(out, ', ') .. '}'
-Str[TType.Or] = \t ->
-	var list, seen = {}, {}
-	let collect = \node ->
-		if node.tag == TType.Or
-			for _, x in ipairs(node)
-				collect(x)
-		else if node.tag == TType.Tuple and #node == 1
-			collect(node[1])
-		else
-			var s = render(node, Prec[TType.Or])
-			if not seen[s]
-				seen[s] = true
-				list[#list + 1] = s
-	for _, x in ipairs(t)
-		collect(x)
-	return table.concat(list, '|')
-Str[TType.And] = \t ->
-	var list = {}
-	for i, x in ipairs(t)
-		list[i] = render(x, Prec[TType.And])
-	return table.concat(list, '&')
+
+var flat_renderer = \own_tag, sep, prec ->
+	return \t ->
+		var list, seen = {}, {}
+		let collect = \node ->
+			if node.tag == own_tag
+				for _, x in ipairs(node)
+					collect(x)
+			else if node.tag == TType.Tuple and #node == 1
+				collect(node[1])
+			else
+				var s = render(node, prec)
+				if not seen[s]
+					seen[s] = true
+					list[#list + 1] = s
+		for _, x in ipairs(t)
+			collect(x)
+		return table.concat(list, sep)
+
+Str[TType.Or] = flat_renderer(TType.Or, '|', Prec[TType.Or])
+Str[TType.And] = flat_renderer(TType.And, '&', Prec[TType.And])
 -- MLstruct: Top, Bot, Neg renderers
 Str[TType.Top] = -> return "Any"
 Str[TType.Bot] = -> return "None"
