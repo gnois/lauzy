@@ -423,7 +423,7 @@ return function(scope, stmts, warn, import, typecheck)
         local rtype = infer_expr(node.right)
         local op = node.op
         if op == "#" then
-            check_op(ty["or"](ty.tbl({}), ty.str()), rtype, node, op, node.right)
+            check_op(ty["or"]({ty.tbl({}), ty.str()}), rtype, node, op, node.right)
             return ty.num()
         end
         if op == "-" then
@@ -437,7 +437,7 @@ return function(scope, stmts, warn, import, typecheck)
         local rtype = infer_expr(node.right)
         local op = node.op
         if op == "and" then
-            return ty["or"](ltype, rtype)
+            return ty["or"]({ltype, rtype})
         end
         if arithmetic(op) or relational(op) then
             if op ~= "==" and op ~= "~=" then
@@ -445,7 +445,7 @@ return function(scope, stmts, warn, import, typecheck)
                     check_op(ty.num(), ltype, node, op, node.left, "left")
                     check_op(ty.num(), rtype, node, op, node.right, "right")
                 else
-                    local ordered = ty["or"](ty.num(), ty.str())
+                    local ordered = ty["or"]({ty.num(), ty.str()})
                     check_op(ordered, ltype, node, op, node.left, "left")
                     check_op(ordered, rtype, node, op, node.right, "right")
                 end
@@ -454,12 +454,12 @@ return function(scope, stmts, warn, import, typecheck)
                 return ty.bool()
             end
         elseif op == ".." then
-            local strnum = ty["or"](ty.num(), ty.str())
+            local strnum = ty["or"]({ty.num(), ty.str()})
             check_op(strnum, rtype, node, op, node.right, "right")
             check_op(strnum, ltype, node, op, node.left, "left")
             return ty.str()
         end
-        return ty["or"](ltype, rtype)
+        return ty["or"]({ltype, rtype})
     end
     Stmt[TStmt.Expr] = function(node)
         infer_expr(node.expr)
@@ -495,7 +495,7 @@ return function(scope, stmts, warn, import, typecheck)
             if tbl then
                 for _, tk in ipairs(tbl) do
                     if tk[2] == field then
-                        tk[1] = ty["or"](tk[1], rtype)
+                        tk[1] = ty["or"]({tk[1], rtype})
                         if otype.tag == TType.New then
                             solv.extend(otype, t)
                         end
@@ -528,7 +528,7 @@ return function(scope, stmts, warn, import, typecheck)
                 ltype = declared_type(n) or infer_expr(n)
                 if not solv.constrain(rtype, ltype) then
                     if ltype.tag == TType.New then
-                        solv.extend(ltype, ty["or"](solv.apply(ltype), rtype))
+                        solv.extend(ltype, ty["or"]({solv.apply(ltype), rtype}))
                     end
                 end
             else
@@ -575,6 +575,15 @@ return function(scope, stmts, warn, import, typecheck)
         end
         return call.args[1].name, ctor()
     end
+    local nil_guard = function(test)
+        if test.tag == TExpr.Id then
+            return test.name, false
+        end
+        if test.tag == TExpr.Unary and test.op == "not" and test.right.tag == TExpr.Id then
+            return test.right.name, true
+        end
+        return nil
+    end
     Stmt[TStmt.If] = function(node)
         for i = 1, #node.tests do
             local test = node.tests[i]
@@ -584,13 +593,23 @@ return function(scope, stmts, warn, import, typecheck)
                 local __, orig = scope.declared(gname)
                 local narrowed = gtype
                 if orig then
-                    narrowed = ty["and"](orig, gtype)
+                    narrowed = ty["and"]({orig, gtype})
                 end
                 scope.update_var(gname, narrowed)
                 check_block(node.thenss[i])
                 scope.update_var(gname, orig)
             else
-                check_block(node.thenss[i])
+                local nname, negated = nil_guard(test)
+                if nname and not negated then
+                    local __, orig = scope.declared(nname)
+                    if orig then
+                        scope.update_var(nname, ty["and"]({orig, ty.neg(ty["nil"]())}))
+                    end
+                    check_block(node.thenss[i])
+                    scope.update_var(nname, orig)
+                else
+                    check_block(node.thenss[i])
+                end
             end
         end
         if node.elses then
@@ -604,17 +623,21 @@ return function(scope, stmts, warn, import, typecheck)
                         neg_map[gname] = {orig = orig, neg = ty.neg(gtype)}
                         neg_keys[#neg_keys + 1] = gname
                     else
-                        neg_map[gname].neg = ty["and"](neg_map[gname].neg, ty.neg(gtype))
+                        neg_map[gname].neg = ty["and"]({neg_map[gname].neg, ty.neg(gtype)})
+                    end
+                else
+                    local nname = nil_guard(node.tests[i])
+                    if nname and not neg_map[nname] then
+                        local __, orig = scope.declared(nname)
+                        neg_map[nname] = {orig = orig, neg = ty.neg(ty["nil"]())}
+                        neg_keys[#neg_keys + 1] = nname
                     end
                 end
             end
             if #neg_keys > 0 then
                 for _, gname in ipairs(neg_keys) do
-                    local refined = neg_map[gname].neg
-                    if neg_map[gname].orig then
-                        refined = ty["and"](neg_map[gname].orig, neg_map[gname].neg)
-                    end
-                    scope.update_var(gname, refined)
+                    local e = neg_map[gname]
+                    scope.update_var(gname, e.orig and ty["and"]({e.orig, e.neg}) or e.neg)
                 end
                 check_block(node.elses)
                 for _, gname in ipairs(neg_keys) do
@@ -664,7 +687,7 @@ return function(scope, stmts, warn, import, typecheck)
         local now = ty.tuple(infer_exprs(node.exprs))
         local prev = scope.get_returns()
         if prev then
-            now = ty["or"](prev, now)
+            now = ty["or"]({prev, now})
         end
         scope.set_returns(now)
     end

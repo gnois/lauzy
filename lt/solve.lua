@@ -71,9 +71,9 @@ return function()
                 if out == nil then
                     out = c
                 elseif pol then
-                    out = ty["or"](out, c)
+                    out = ty["or"]({out, c})
                 else
-                    out = ty["and"](out, c)
+                    out = ty["and"]({out, c})
                 end
             end
             seen[mark] = nil
@@ -95,14 +95,14 @@ return function()
             for i, v in ipairs(node) do
                 out[i] = coalesce(v, pol, seen)
             end
-            return ty.keep_varargs(node, ty["or"](unpack(out)))
+            return ty.keep_varargs(node, ty["or"](out))
         end
         if node.tag == TType.And then
             local out = {}
             for i, v in ipairs(node) do
                 out[i] = coalesce(v, pol, seen)
             end
-            return ty.keep_varargs(node, ty["and"](unpack(out)))
+            return ty.keep_varargs(node, ty["and"](out))
         end
         if node.tag == TType.Tbl then
             local out = {}
@@ -579,14 +579,14 @@ return function()
                         return true
                     end
                 end
-                return false, describe(lhs) .. " does not satisfy " .. describe(rhs)
+                return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
             end
             if lhs.tag == TType.Nil and rinner.tag == TType.Nil then
-                return false, "type nil does not satisfy " .. describe(rhs)
+                return false, "expects " .. describe(rhs) .. ", got nil"
             end
             if lhs.tag == TType.Val and rinner.tag == TType.Val then
                 if lhs.type == rinner.type then
-                    return false, "type " .. describe(lhs) .. " does not satisfy " .. describe(rhs)
+                    return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
                 end
                 return true
             end
@@ -602,7 +602,7 @@ return function()
             if lhs.tag == TType.Tbl and rinner.tag == TType.Func then
                 return true
             end
-            return false, describe(lhs) .. " does not satisfy " .. describe(rhs)
+            return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
         end
         if lhs.tag == TType.Neg then
             if rhs.tag == TType.Top then
@@ -618,7 +618,7 @@ return function()
                         return true
                     end
                 end
-                return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+                return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
             end
             if rhs.tag == TType.And then
                 for _, t in ipairs(rhs) do
@@ -629,7 +629,7 @@ return function()
                 end
                 return true
             end
-            return false, describe(lhs) .. " cannot satisfy " .. describe(rhs)
+            return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)
@@ -723,7 +723,7 @@ return function()
                 if lhs.type == rhs.type then
                     return true
                 end
-                return false, "expected " .. describe(rhs) .. ", got " .. describe(lhs)
+                return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
             end
             if lhs.tag == TType.Func then
                 local lhs_outs = lhs.outs or ty.tuple_none()
