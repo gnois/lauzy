@@ -83,9 +83,10 @@ return function(scope, stmts, warn, import, typecheck)
                 local act = solv.describe(actual)
                 local exp = solv.describe(expected)
                 local eup = solv.describe(expected, false)
-                local snapshot = " [ " .. act .. " <: " .. exp .. " ]"
+                local snap_exp = eup ~= exp and eup or exp
+                local snapshot = " [ " .. act .. " <: " .. snap_exp .. " ]"
                 if eup ~= exp then
-                    snapshot = snapshot .. "  (upper: " .. eup .. ")"
+                    snapshot = snapshot .. "  (lower: " .. exp .. ")"
                 end
                 warn(node.line, node.col, 1, msg .. err .. snapshot)
             end
@@ -433,9 +434,15 @@ return function(scope, stmts, warn, import, typecheck)
         return ty.bool()
     end
     Expr[TExpr.Binary] = function(node)
+        local op = node.op
+        if op == "or" and node.left.tag == TExpr.Binary and node.left.op == "and" then
+            infer_expr(node.left.left)
+            local btype = infer_expr(node.left.right)
+            local ctype = infer_expr(node.right)
+            return ty["or"]({btype, ctype})
+        end
         local ltype = infer_expr(node.left)
         local rtype = infer_expr(node.right)
-        local op = node.op
         if op == "and" then
             return ty["or"]({ltype, rtype})
         end
