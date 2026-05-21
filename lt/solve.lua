@@ -42,7 +42,74 @@ return function()
         list[#list + 1] = t
         return true
     end
-    local coalesce; coalesce = function(node, pol, seen)
+    local find_cooccurring; find_cooccurring = function(root)
+        local pos = {}
+        local neg = {}
+        local scan; scan = function(n, pol, seen)
+            if not n or type(n) ~= "table" then
+                return 
+            end
+            if n.tag == TType.New then
+                ensure_var(n)
+                if pol then
+                    pos[n.id] = true
+                else
+                    neg[n.id] = true
+                end
+                local key = n.id .. (pol and "+" or "-")
+                if seen[key] then
+                    return 
+                end
+                seen[key] = true
+                local rep = subs[n.id]
+                if rep and rep ~= n then
+                    scan(rep, pol, seen)
+                    return 
+                end
+                local bounds = pol and n.sub or n.sup
+                for _, b in ipairs(bounds) do
+                    scan(b, pol, seen)
+                end
+                return 
+            end
+            if seen[n] then
+                return 
+            end
+            seen[n] = true
+            if n.tag == TType.Func then
+                scan(n.ins, not pol, seen)
+                scan(n.outs, pol, seen)
+                return 
+            end
+            if n.tag == TType.Tuple or n.tag == TType.Or or n.tag == TType.And then
+                for _, v in ipairs(n) do
+                    scan(v, pol, seen)
+                end
+                return 
+            end
+            if n.tag == TType.Tbl then
+                for _, tk in ipairs(n) do
+                    scan(tk[1], pol, seen)
+                    if type(tk[2]) == "table" then
+                        scan(tk[2], pol, seen)
+                    end
+                end
+                return 
+            end
+            if n.tag == TType.Neg then
+                scan(n[1], not pol, seen)
+            end
+        end
+        scan(root, true, {})
+        local co = {}
+        for id in pairs(pos) do
+            if neg[id] then
+                co[id] = true
+            end
+        end
+        return co
+    end
+    local coalesce; coalesce = function(node, pol, seen, co_vars)
         pol = pol ~= false
         seen = seen or {}
         if not node then
@@ -52,7 +119,7 @@ return function()
             ensure_var(node)
             local rep = subs[node.id]
             if rep and rep ~= node then
-                local result = coalesce(rep, pol, seen)
+                local result = coalesce(rep, pol, seen, co_vars)
                 return ty.keep_varargs(node, result)
             end
             local mark = tostring(node.id) .. (pol and "+" or "-")
@@ -63,11 +130,14 @@ return function()
             local bounds = pol and node.sub or node.sup
             if #bounds == 0 then
                 seen[mark] = nil
+                if co_vars and co_vars[node.id] then
+                    return ty.keep_varargs(node, ty.new_var(node.id, 0, {}, {}))
+                end
                 return ty.keep_varargs(node, pol and ty.bot() or ty.top())
             end
             local out = nil
             for _, b in ipairs(bounds) do
-                local c = coalesce(b, pol, seen)
+                local c = coalesce(b, pol, seen, co_vars)
                 if out == nil then
                     out = c
                 elseif pol then
@@ -81,26 +151,26 @@ return function()
             return ty.keep_varargs(node, result)
         end
         if node.tag == TType.Func then
-            return ty.keep_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen), outs = coalesce(node.outs, pol, seen)})
+            return ty.keep_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen, co_vars), outs = coalesce(node.outs, pol, seen, co_vars)})
         end
         if node.tag == TType.Tuple then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = coalesce(v, pol, seen)
+                out[i] = coalesce(v, pol, seen, co_vars)
             end
             return ty.keep_varargs(node, ty.tuple(out))
         end
         if node.tag == TType.Or then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = coalesce(v, pol, seen)
+                out[i] = coalesce(v, pol, seen, co_vars)
             end
             return ty.keep_varargs(node, ty["or"](out))
         end
         if node.tag == TType.And then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = coalesce(v, pol, seen)
+                out[i] = coalesce(v, pol, seen, co_vars)
             end
             return ty.keep_varargs(node, ty["and"](out))
         end
@@ -109,14 +179,14 @@ return function()
             for i, tk in ipairs(node) do
                 local key = tk[2]
                 if "table" == type(key) then
-                    key = coalesce(key, pol, seen)
+                    key = coalesce(key, pol, seen, co_vars)
                 end
-                out[i] = {coalesce(tk[1], pol, seen), key}
+                out[i] = {coalesce(tk[1], pol, seen, co_vars), key}
             end
             return ty.keep_varargs(node, ty.tbl(out))
         end
         if node.tag == TType.Neg then
-            return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen)))
+            return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen, co_vars)))
         end
         if node.tag == TType.Top or node.tag == TType.Bot then
             return node
@@ -125,7 +195,8 @@ return function()
     end
     local simplify = function(node, pol)
         if node then
-            return ty.simplify(coalesce(node, pol ~= false, {}), {})
+            local co_vars = find_cooccurring(node)
+            return ty.simplify(coalesce(node, pol ~= false, {}, co_vars), {})
         end
         return node
     end

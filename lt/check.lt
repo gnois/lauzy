@@ -76,9 +76,13 @@ return \scope, stmts, warn, import, typecheck ->
 				var act = solv.describe(actual)
 				var exp = solv.describe(expected)
 				var eup = solv.describe(expected, false)
-				var snapshot = ' [ ' .. act .. " <: " .. exp .. ' ]'
+				-- When upper bound differs from lower bound, the snapshot should show the upper
+				-- bound (what the constraint actually failed against), not the lower bound (which
+				-- would appear to match and confuse the reader).
+				var snap_exp = (eup ~= exp) and eup or exp
+				var snapshot = ' [ ' .. act .. " <: " .. snap_exp .. ' ]'
 				if eup ~= exp
-					snapshot = snapshot .. "  (upper: " .. eup .. ")"
+					snapshot = snapshot .. "  (lower: " .. exp .. ")"
 				warn(node.line, node.col, 1, msg .. err .. snapshot)
 			return ok and actual or false
 		return expected
@@ -392,10 +396,20 @@ return \scope, stmts, warn, import, typecheck ->
 		return ty.bool()
 
 	Expr[TExpr.Binary] = \node ->
+		var op = node.op
+
+		-- Lua ternary idiom: `(a and b) or c`
+		-- Type it as `b_type | c_type`, discarding a's type from the result,
+		-- since b is always the truthy branch and a is just the condition.
+		if op == 'or' and node.left.tag == TExpr.Binary and node.left.op == 'and'
+			infer_expr(node.left.left)             -- infer `a` for side-effects/constraints
+			var btype = infer_expr(node.left.right) -- `b` (truthy branch)
+			var ctype = infer_expr(node.right)      -- `c` (fallback branch)
+			return ty.or({btype, ctype})
+
 		var ltype = infer_expr(node.left)
 		var rtype = infer_expr(node.right)
 
-		var op = node.op
 		if op == 'and'
 			-- x and y: returns x if falsy, else y; union is a safe over-approximation
 			return ty.or({ltype, rtype})

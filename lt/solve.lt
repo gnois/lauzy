@@ -37,7 +37,63 @@ return ->
 		return true
 
 
-	let coalesce = \node, pol, seen ->
+	-- Pre-scan a type to find var IDs that appear at BOTH polarities (positive and negative).
+	-- Such vars co-occur and must be kept as named type variables rather than collapsed to Bot/Top,
+	-- preserving the polymorphic relationship (e.g. α->α instead of Any->None).
+	let find_cooccurring = \root ->
+		var pos = {}
+		var neg = {}
+		let scan = \n, pol, seen ->
+			if not n or type(n) ~= 'table'
+				return
+			if n.tag == TType.New
+				ensure_var(n)
+				-- Record polarity BEFORE the seen-guard so that a var appearing in
+				-- both ins (negative) and outs (positive) is counted at BOTH polarities.
+				if pol
+					pos[n.id] = true
+				else
+					neg[n.id] = true
+				-- Use a polarity-aware key to guard against recursive bounds cycles.
+				var key = n.id .. (pol and "+" or "-")
+				if seen[key]
+					return
+				seen[key] = true
+				var rep = subs[n.id]
+				if rep and rep ~= n
+					scan(rep, pol, seen)
+					return
+				var bounds = pol and n.sub or n.sup
+				for _, b in ipairs(bounds)
+					scan(b, pol, seen)
+				return
+			if seen[n]
+				return
+			seen[n] = true
+			if n.tag == TType.Func
+				scan(n.ins, not pol, seen)
+				scan(n.outs, pol, seen)
+				return
+			if n.tag == TType.Tuple or n.tag == TType.Or or n.tag == TType.And
+				for _, v in ipairs(n)
+					scan(v, pol, seen)
+				return
+			if n.tag == TType.Tbl
+				for _, tk in ipairs(n)
+					scan(tk[1], pol, seen)
+					if type(tk[2]) == 'table'
+						scan(tk[2], pol, seen)
+				return
+			if n.tag == TType.Neg
+				scan(n[1], not pol, seen)
+		scan(root, true, {})
+		var co = {}
+		for id in pairs(pos)
+			if neg[id]
+				co[id] = true
+		return co
+
+	let coalesce = \node, pol, seen, co_vars ->
 		pol = pol ~= false
 		seen = seen or {}
 		if not node
@@ -49,21 +105,26 @@ return ->
 			if rep and rep ~= node
 				-- propagate varargs flag when following a substitution
 				-- so that varargs param vars keep their * after being bound to a concrete type
-				var result = coalesce(rep, pol, seen)
+				var result = coalesce(rep, pol, seen, co_vars)
 				return ty.keep_varargs(node, result)
 			var mark = tostring(node.id) .. (pol and "+" or "-")
 			if seen[mark]
 				return node
 			seen[mark] = true
 			var bounds = pol and node.sub or node.sup
-			-- MLstruct: polarity collapse - unconstrained var becomes bot/top
+			-- If this var co-occurs in both polarities, keep it as a named type variable
+			-- (SimpleSub co-occurrence rule) so both positions render with the same name.
 			if #bounds == 0
 				seen[mark] = nil
+				if co_vars and co_vars[node.id]
+					-- Return a stripped copy (tag + id only, no sub/sup/level) so that
+					-- downstream calls to same()/dedup() cannot follow bound cycles.
+					return ty.keep_varargs(node, ty.new_var(node.id, 0, {}, {}))
 				return ty.keep_varargs(node, pol and ty.bot() or ty.top())
 			-- do NOT seed with node itself: coalesce replaces a var with the join/meet of its bounds
 			var out = nil
 			for _, b in ipairs(bounds)
-				var c = coalesce(b, pol, seen)
+				var c = coalesce(b, pol, seen, co_vars)
 				if out == nil
 					out = c
 				else if pol
@@ -79,26 +140,26 @@ return ->
 		if node.tag == TType.Func
 			return ty.keep_varargs(node, {
 				tag = TType.Func
-				, ins = coalesce(node.ins, not pol, seen)
-				, outs = coalesce(node.outs, pol, seen)
+				, ins = coalesce(node.ins, not pol, seen, co_vars)
+				, outs = coalesce(node.outs, pol, seen, co_vars)
 			})
 
 		if node.tag == TType.Tuple
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = coalesce(v, pol, seen)
+				out[i] = coalesce(v, pol, seen, co_vars)
 			return ty.keep_varargs(node, ty.tuple(out))
 
 		if node.tag == TType.Or
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = coalesce(v, pol, seen)
+				out[i] = coalesce(v, pol, seen, co_vars)
 			return ty.keep_varargs(node, ty.or(out))
 
 		if node.tag == TType.And
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = coalesce(v, pol, seen)
+				out[i] = coalesce(v, pol, seen, co_vars)
 			return ty.keep_varargs(node, ty.and(out))
 
 		if node.tag == TType.Tbl
@@ -106,13 +167,13 @@ return ->
 			for i, tk in ipairs(node)
 				var key = tk[2]
 				if "table" == type(key)
-					key = coalesce(key, pol, seen)
-				out[i] = { coalesce(tk[1], pol, seen), key }
+					key = coalesce(key, pol, seen, co_vars)
+				out[i] = { coalesce(tk[1], pol, seen, co_vars), key }
 			return ty.keep_varargs(node, ty.tbl(out))
 
 		-- MLstruct: negation flips polarity
 		if node.tag == TType.Neg
-			return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen)))
+			return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen, co_vars)))
 
 		if node.tag == TType.Top or node.tag == TType.Bot
 			return node
@@ -121,7 +182,8 @@ return ->
 
 	var simplify = \node, pol ->
 		if node
-			return ty.simplify(coalesce(node, pol ~= false, {}), {})
+			var co_vars = find_cooccurring(node)
+			return ty.simplify(coalesce(node, pol ~= false, {}, co_vars), {})
 		return node
 
 	var describe = \node, pol ->
