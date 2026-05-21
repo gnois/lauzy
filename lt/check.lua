@@ -343,7 +343,7 @@ return function(scope, stmts, warn, import, typecheck)
             ptypes[i] = t
         end
         check_block(node.body)
-        local rtuple = scope.get_returns() or ty.tuple_none()
+        local rtuple = scope.get_returns() or ty.tuple({ty["nil"]()})
         scope.end_func()
         return ty.func(ty.tuple(ptypes), rtuple)
     end

@@ -308,8 +308,7 @@ return \scope, stmts, warn, import, typecheck ->
 			ptypes[i] = t
 
 		check_block(node.body)
-
-		var rtuple = scope.get_returns() or ty.tuple_none()
+		var rtuple = scope.get_returns() or ty.tuple({ty.nil()})
 		scope.end_func()
 		return ty.func(ty.tuple(ptypes), rtuple)
 

@@ -293,9 +293,6 @@ Str[TType.Tuple] = function(t)
     for i, v in ipairs(t) do
         out[i] = render(v, -1)
     end
-    if #out == 1 then
-        return out[1]
-    end
     return "(" .. table.concat(out, ", ") .. ")"
 end
 Str[TType.Func] = function(t)
@@ -324,6 +321,7 @@ Str[TType.Tbl] = function(t)
     return "{" .. table.concat(out, ", ") .. "}"
 end
 local flat_renderer = function(own_tag, sep, prec)
+    local identity = own_tag == TType.Or and TType.Bot or TType.Top
     return function(t)
         local list, seen = {}, {}
         local collect; collect = function(node)
@@ -334,6 +332,9 @@ local flat_renderer = function(own_tag, sep, prec)
             elseif node.tag == TType.Tuple and #node == 1 then
                 collect(node[1])
             else
+                if node.tag == identity then
+                    return 
+                end
                 local s = render(node, prec)
                 if not seen[s] then
                     seen[s] = true
@@ -343,6 +344,9 @@ local flat_renderer = function(own_tag, sep, prec)
         end
         for _, x in ipairs(t) do
             collect(x)
+        end
+        if #list == 0 then
+            list[1] = Str[identity]({})
         end
         return table.concat(list, sep)
     end

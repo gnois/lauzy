@@ -270,8 +270,8 @@ Str[TType.Tuple] = \t ->
 	var out = {}
 	for i, v in ipairs(t)
 		out[i] = render(v, -1)
-	if #out == 1
-		return out[1]
+	--if #out == 1
+	--	return out[1]
 	return '(' .. table.concat(out, ', ') .. ')'
 Str[TType.Func] = \t ->
 	return table.concat({render(t.ins, 3), '->', render(t.outs, 3)})
@@ -294,6 +294,8 @@ Str[TType.Tbl] = \t ->
 	return '{' .. table.concat(out, ', ') .. '}'
 
 var flat_renderer = \own_tag, sep, prec ->
+	-- identity: the element that contributes nothing to the compound (Bot for Or, Top for And)
+	var identity = own_tag == TType.Or and TType.Bot or TType.Top
 	return \t ->
 		var list, seen = {}, {}
 		let collect = \node ->
@@ -303,12 +305,18 @@ var flat_renderer = \own_tag, sep, prec ->
 			else if node.tag == TType.Tuple and #node == 1
 				collect(node[1])
 			else
+				-- T | None = T  /  T & Any = T: skip identity elements at render time
+				if node.tag == identity
+					return
 				var s = render(node, prec)
 				if not seen[s]
 					seen[s] = true
 					list[#list + 1] = s
 		for _, x in ipairs(t)
 			collect(x)
+		-- if everything was filtered (e.g. Or{None,None}), the whole thing is the identity
+		if #list == 0
+			list[1] = Str[identity]({})
 		return table.concat(list, sep)
 
 Str[TType.Or] = flat_renderer(TType.Or, '|', Prec[TType.Or])
