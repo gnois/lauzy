@@ -475,7 +475,11 @@ return function(scope, stmts, warn, import, typecheck)
         balance_check(node.vars, node.exprs)
         local rtypes = with_lvl(1, infer_exprs, node.exprs)
         for i, var in ipairs(node.vars) do
-            declare(var, solv.extend(new(), rtypes[i] or ty["nil"]()))
+            local rt = rtypes[i] or ty["nil"]()
+            if solv.apply(rt).tag == TType.Func then
+                rt = solv.simplify(rt)
+            end
+            declare(var, solv.extend(new(), rt))
         end
     end
     Stmt[TStmt.Let] = function(node)

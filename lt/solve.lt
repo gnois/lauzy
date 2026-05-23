@@ -470,6 +470,41 @@ return ->
 		to_lvl = to_lvl or lim
 		var freshened = {}
 
+		-- Returns true if node contains any type var at level > lim.
+		-- Bounds that don't contain high-level vars are concrete callee-body
+		-- constraints and must not be propagated to the caller's fresh instance.
+		let has_high_var = \node, seen ->
+			node = apply(node)
+			if not node or type(node) ~= 'table'
+				return false
+			seen = seen or {}
+			if seen[node]
+				return false
+			seen[node] = true
+			if node.tag == TType.New
+				ensure_var(node)
+				if (node.level or 0) > lim
+					return true
+				for _, b in ipairs(node.sub)
+					if has_high_var(b, seen) return true
+				for _, b in ipairs(node.sup)
+					if has_high_var(b, seen) return true
+				return false
+			if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+				for _, v in ipairs(node)
+					if has_high_var(v, seen) return true
+				return false
+			if node.tag == TType.Func
+				return has_high_var(node.ins, seen) or has_high_var(node.outs, seen)
+			if node.tag == TType.Tbl
+				for _, tk in ipairs(node)
+					if has_high_var(tk[1], seen) return true
+					if type(tk[2]) == 'table' and has_high_var(tk[2], seen) return true
+				return false
+			if node.tag == TType.Neg
+				return has_high_var(node[1], seen)
+			return false
+
 		let rec = \node ->
 			node = apply(node)
 			if node.tag == TType.New
@@ -482,9 +517,11 @@ return ->
 				fv = fresh_var(to_lvl)
 				freshened[node.id] = fv
 				for _, b in ipairs(node.sub)
-					fv.sub[#fv.sub + 1] = rec(b)
+					if has_high_var(b)
+						fv.sub[#fv.sub + 1] = rec(b)
 				for _, b in ipairs(node.sup)
-					fv.sup[#fv.sup + 1] = rec(b)
+					if has_high_var(b)
+						fv.sup[#fv.sup + 1] = rec(b)
 				return ty.keep_varargs(node, fv)
 			if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
 				var out = {}

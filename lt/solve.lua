@@ -550,6 +550,60 @@ return function()
         lim = lim or 0
         to_lvl = to_lvl or lim
         local freshened = {}
+        local has_high_var; has_high_var = function(node, seen)
+            node = apply(node)
+            if not node or type(node) ~= "table" then
+                return false
+            end
+            seen = seen or {}
+            if seen[node] then
+                return false
+            end
+            seen[node] = true
+            if node.tag == TType.New then
+                ensure_var(node)
+                if (node.level or 0) > lim then
+                    return true
+                end
+                for _, b in ipairs(node.sub) do
+                    if has_high_var(b, seen) then
+                        return true
+                    end
+                end
+                for _, b in ipairs(node.sup) do
+                    if has_high_var(b, seen) then
+                        return true
+                    end
+                end
+                return false
+            end
+            if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
+                for _, v in ipairs(node) do
+                    if has_high_var(v, seen) then
+                        return true
+                    end
+                end
+                return false
+            end
+            if node.tag == TType.Func then
+                return has_high_var(node.ins, seen) or has_high_var(node.outs, seen)
+            end
+            if node.tag == TType.Tbl then
+                for _, tk in ipairs(node) do
+                    if has_high_var(tk[1], seen) then
+                        return true
+                    end
+                    if type(tk[2]) == "table" and has_high_var(tk[2], seen) then
+                        return true
+                    end
+                end
+                return false
+            end
+            if node.tag == TType.Neg then
+                return has_high_var(node[1], seen)
+            end
+            return false
+        end
         local rec; rec = function(node)
             node = apply(node)
             if node.tag == TType.New then
@@ -564,10 +618,14 @@ return function()
                 fv = fresh_var(to_lvl)
                 freshened[node.id] = fv
                 for _, b in ipairs(node.sub) do
-                    fv.sub[#fv.sub + 1] = rec(b)
+                    if has_high_var(b) then
+                        fv.sub[#fv.sub + 1] = rec(b)
+                    end
                 end
                 for _, b in ipairs(node.sup) do
-                    fv.sup[#fv.sup + 1] = rec(b)
+                    if has_high_var(b) then
+                        fv.sup[#fv.sup + 1] = rec(b)
+                    end
                 end
                 return ty.keep_varargs(node, fv)
             end

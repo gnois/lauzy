@@ -442,7 +442,12 @@ return \scope, stmts, warn, import, typecheck ->
 		balance_check(node.vars, node.exprs)
 		var rtypes = with_lvl(1, infer_exprs, node.exprs)
 		for i, var in ipairs(node.vars)
-			declare(var, solv.extend(new(), rtypes[i] or ty.nil()))
+			var rt = rtypes[i] or ty.nil()
+			-- generalize function types so their param type-vars don't leak upper-bound
+			-- constraints across call sites at the same level (SimpleSub let-generalization)
+			if solv.apply(rt).tag == TType.Func
+				rt = solv.simplify(rt)
+			declare(var, solv.extend(new(), rt))
 
 	-- let: pre-declare name before inferring RHS so recursive references resolve
 	Stmt[TStmt.Let] = \node ->
