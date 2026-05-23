@@ -177,9 +177,9 @@ return function(scope, stmts, warn, import, typecheck)
         local avar = an > 0 and atypes[an] and atypes[an].varargs
         local actual_arity = arity_shape(atypes, an, avar)
         local arity_msg = function()
-            local who = ""
+            local who = "function "
             if fname then
-                who = "`" .. fname .. "` "
+                who = who .. "`" .. fname .. "` "
             end
             local expected_tuple = ty.tostr(params)
             local actual_tuple = ty.tostr(ty.tuple(atypes))

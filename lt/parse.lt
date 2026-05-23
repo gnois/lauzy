@@ -147,6 +147,7 @@ return \ls, warn ->
 	expr_table = \loc ->
 		var vks, n = {}, 0
 		var dented = false
+		var had_sep = false
 		lex_check('{')
 		while ls.token ~= '}'
 			dented = lex_opt_dent(dented)
@@ -157,6 +158,8 @@ return \ls, warn ->
 
 			-- in case the table ends immediately
 			if ls.token == '}'
+				if had_sep
+					err_warn("trailing `,` in table")
 				break
 			var key
 			if ls.token == '['
@@ -192,7 +195,11 @@ return \ls, warn ->
 			dented = lex_opt_dent(dented)
 			if ls.token == ';'
 				err_instead(1, "use `,`")
-			if not lex_opt(',') and not lex_opt(';')
+			had_sep = lex_opt(',') or lex_opt(';')
+			if not had_sep
+				break
+			if ls.token == '}'
+				err_warn("trailing `,` in table")
 				break
 
 		close_dented(dented, loc.line)
