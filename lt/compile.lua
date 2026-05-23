@@ -103,8 +103,8 @@ local report = function(color, get_source)
 end
 return function(options, color)
     local imports = {}
-    local compile, import
-    compile = function(source)
+    local import
+    local compile; compile = function(source)
         local ast, typ, luacode
         local s = reader.stream(source)
         local r = report(color, s.text)

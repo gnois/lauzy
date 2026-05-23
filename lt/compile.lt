@@ -111,10 +111,10 @@ var report = \color, get_source ->
 --`
 return \options, color ->
 	var imports = {}
-	var compile, import
+	var import
 
 	-- returns type, code, warns
-	compile = \source ->
+	let compile = \source ->
 		var ast, typ, luacode
 		var s = reader.stream(source)
 

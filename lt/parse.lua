@@ -142,6 +142,7 @@ return function(ls, warn)
     expr_table = function(loc)
         local vks, n = {}, 0
         local dented = false
+        local had_sep = false
         lex_check("{")
         while ls.token ~= "}" do
             dented = lex_opt_dent(dented)
@@ -150,6 +151,9 @@ return function(ls, warn)
                 ls.step()
             end
             if ls.token == "}" then
+                if had_sep then
+                    err_warn("trailing `,` in table")
+                end
                 break
             end
             local key
@@ -187,7 +191,12 @@ return function(ls, warn)
             if ls.token == ";" then
                 err_instead(1, "use `,`")
             end
-            if not lex_opt(",") and not lex_opt(";") then
+            had_sep = lex_opt(",") or lex_opt(";")
+            if not had_sep then
+                break
+            end
+            if ls.token == "}" then
+                err_warn("trailing `,` in table")
                 break
             end
         end

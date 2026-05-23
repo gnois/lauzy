@@ -158,9 +158,9 @@ return \scope, stmts, warn, import, typecheck ->
 		var actual_arity = arity_shape(atypes, an, avar)
 
 		var arity_msg = \ ->
-			var who = ""
+			var who = "function "
 			if fname
-				who = "`" .. fname .. "` "
+				who = who .. "`" .. fname .. "` "
 			var expected_tuple = ty.tostr(params)
 			var actual_tuple = ty.tostr(ty.tuple(atypes))
 			return who .. "expects " .. expected_arity .. " arguments " .. expected_tuple .. ", got " .. actual_arity .. " " .. actual_tuple
