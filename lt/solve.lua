@@ -146,6 +146,20 @@ return function()
                     out = ty["and"]({out, c})
                 end
             end
+            if pol and #node.sup > 0 and not (co_vars and co_vars[node.id]) then
+                local sup_out = nil
+                for _, b in ipairs(node.sup) do
+                    local c = coalesce(b, false, seen, co_vars)
+                    if sup_out == nil then
+                        sup_out = c
+                    else
+                        sup_out = ty["and"]({sup_out, c})
+                    end
+                end
+                if sup_out and sup_out.tag ~= TType.Top then
+                    out = ty["and"]({out or ty.bot(), sup_out})
+                end
+            end
             seen[mark] = nil
             local result = out or (pol and ty.bot() or ty.top())
             return ty.keep_varargs(node, result)
@@ -816,6 +830,10 @@ return function()
             return false, last_err
         end
         if lhs.tag == TType.And then
+            local slhs = simplify(lhs)
+            if slhs.tag ~= TType.And then
+                return constrain(slhs, rhs, cache)
+            end
             local last_err = "cannot constrain intersection"
             for _, t in ipairs(lhs) do
                 local ok, err = constrain(t, rhs, cache)

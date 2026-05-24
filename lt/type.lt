@@ -117,6 +117,35 @@ var keep_varargs = \src, dst ->
 -- Apply lattice laws for Or/And, and unwrap single-element results.
 -- absorber: the short-circuit element (Top for Or, Bot for And)
 -- identity: the element to drop from the list (Bot for Or, Top for And)
+-- Returns true if two concrete (non-var) types are provably disjoint,
+-- meaning they can never share a value.  Used to drop trivially satisfied
+-- negation constraints in intersections: X & ~Y = X when disjoint(X, Y).
+let concrete_disjoint = \a, b ->
+	-- Nil vs Val/Func/Tbl/Tuple
+	if a.tag == TType.Nil
+		return b.tag == TType.Val or b.tag == TType.Func or b.tag == TType.Tbl or b.tag == TType.Tuple
+	if b.tag == TType.Nil
+		return a.tag == TType.Val or a.tag == TType.Func or a.tag == TType.Tbl or a.tag == TType.Tuple
+	-- Two Vals: disjoint only when primitive kinds differ (e.g. num vs str)
+	if a.tag == TType.Val and b.tag == TType.Val
+		return a.type ~= b.type
+	-- Val vs Func/Tbl/Tuple
+	if a.tag == TType.Val
+		return b.tag == TType.Func or b.tag == TType.Tbl or b.tag == TType.Tuple
+	if b.tag == TType.Val
+		return a.tag == TType.Func or a.tag == TType.Tbl or a.tag == TType.Tuple
+	-- Func vs Tbl/Tuple
+	if a.tag == TType.Func
+		return b.tag == TType.Tbl or b.tag == TType.Tuple
+	if a.tag == TType.Tbl
+		return b.tag == TType.Func or b.tag == TType.Tuple
+	-- Tuple vs Func/Tbl (Tuple vs Nil/Val already handled above)
+	if a.tag == TType.Tuple
+		return b.tag == TType.Func or b.tag == TType.Tbl
+	if b.tag == TType.Tuple
+		return a.tag == TType.Func or a.tag == TType.Tbl
+	return false
+
 let compound_type = \tag, parts ->
 	var absorber = tag == TType.Or and TType.Top or TType.Bot
 	var identity = tag == TType.Or and TType.Bot or TType.Top
@@ -130,9 +159,43 @@ let compound_type = \tag, parts ->
 			for __, b in ipairs(parts)
 				if same(a[1], b)
 					return create(absorber, {})
+		-- For And: X & ~Y = X when X and Y are from disjoint type families.
+		-- The negation is trivially satisfied and adds no information -- drop it.
+		var skip = false
+		if tag == TType.And and a.tag == TType.Neg
+			var neg_inner = a[1]
+			var has_concrete = false
+			var all_disjoint = true
+			for __, b in ipairs(parts)
+				if b ~= a and b.tag ~= TType.Neg and b.tag ~= TType.Top and b.tag ~= TType.Bot
+					has_concrete = true
+					if not concrete_disjoint(b, neg_inner)
+						all_disjoint = false
+						break
+			if has_concrete and all_disjoint
+				skip = true
 		-- T | Bot = T  /  T & Top = T  (drop identity elements)
-		if a.tag ~= identity
+		if not skip and a.tag ~= identity
 			filtered[#filtered + 1] = a
+	-- Absorption: A | (A & B) = A  /  A & (A | B) = A
+	-- An And-term inside Or is redundant if any of its members already appears
+	-- in the Or; an Or-term inside And is redundant if any of its members already
+	-- appears in the And.
+	var sub_tag = tag == TType.Or and TType.And or TType.Or
+	var absorbed = {}
+	for i, a in ipairs(filtered)
+		var drop = false
+		if a.tag == sub_tag
+			for _, part in ipairs(a)
+				for j, b in ipairs(filtered)
+					if j ~= i and (part == b or same(part, b))
+						drop = true
+						break
+				if drop
+					break
+		if not drop
+			absorbed[#absorbed + 1] = a
+	filtered = absorbed
 	-- single-element: unwrap
 	if #filtered == 1
 		return filtered[1]
@@ -199,6 +262,23 @@ let simplify = \node, seen ->
 			else
 				flat[#flat + 1] = sv
 		flat = dedup(flat)
+		-- Distribute And over Or: (A|B) & C  ->  (A&C) | (B&C)
+		-- This lets compound_type's T & ~T = Bot rule fire on pairs like
+		-- (A|~A) & B, turning them to Bot.
+		if node.tag == TType.And
+			for i, v in ipairs(flat)
+				if v.tag == TType.Or
+					var rest = {}
+					for j, w in ipairs(flat)
+						if j ~= i
+							rest[#rest + 1] = w
+					var branches = {}
+					for _, branch in ipairs(v)
+						var parts = { branch }
+						for __, w in ipairs(rest)
+							parts[#parts + 1] = w
+						branches[#branches + 1] = simplify(compound_type(TType.And, parts), {})
+					return keep_varargs(node, compound_type(TType.Or, branches))
 		return keep_varargs(node, compound_type(node.tag, flat))
 
 	if node.tag == TType.Tuple
@@ -223,9 +303,38 @@ let simplify = \node, seen ->
 			out[i] = { simplify(tk[1], seen), key }
 		return keep_varargs(node, Type.tbl(out))
 
-	-- MLstruct: negation simplifies by simplifying its inner type
+	-- MLstruct: push negations inward with De Morgan's laws and double negation
 	if node.tag == TType.Neg
-		return keep_varargs(node, Type.neg(simplify(node[1], seen)))
+		var inner = simplify(node[1], seen)
+		-- ~~A -> A  (double negation elimination)
+		if inner.tag == TType.Neg
+			return keep_varargs(node, inner[1])
+		-- ~(A | B) -> ~A & ~B  (De Morgan, only when all parts are concrete)
+		-- Avoid expanding type-var unions to prevent infinite unfolding.
+		if inner.tag == TType.Or
+			var all_concrete = true
+			for _, v in ipairs(inner)
+				if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot
+					all_concrete = false
+					break
+			if all_concrete
+				var parts = {}
+				for _, v in ipairs(inner)
+					parts[#parts + 1] = simplify(Type.neg(v), {})
+				return keep_varargs(node, compound_type(TType.And, flatten(TType.And, parts)))
+		-- ~(A & B) -> ~A | ~B  (De Morgan, only when all parts are concrete)
+		if inner.tag == TType.And
+			var all_concrete = true
+			for _, v in ipairs(inner)
+				if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot
+					all_concrete = false
+					break
+			if all_concrete
+				var parts = {}
+				for _, v in ipairs(inner)
+					parts[#parts + 1] = simplify(Type.neg(v), {})
+				return keep_varargs(node, compound_type(TType.Or, flatten(TType.Or, parts)))
+		return keep_varargs(node, Type.neg(inner))
 
 	if node.tag == TType.Top or node.tag == TType.Bot
 		return node

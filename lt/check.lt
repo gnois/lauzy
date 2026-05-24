@@ -238,20 +238,53 @@ return \scope, stmts, warn, import, typecheck ->
 		fail(node, "expression")
 		return new()
 
+	-- Extract the i-th element from a type that may be Or{Tuple, Tuple, ...}.
+	-- Returns nil if i is out of range for all branches.
+	let or_tuple_elem = \nt, i ->
+		if nt.tag == TType.Or
+			var elems = {}
+			for _, branch in ipairs(nt)
+				if branch.tag == TType.Tuple
+					elems[#elems + 1] = branch[i] or ty.nil()
+				else
+					-- non-tuple branch: treat as single-value
+					elems[#elems + 1] = (i == 1) and branch or ty.nil()
+			if #elems == 0
+				return nil
+			if #elems == 1
+				return elems[1]
+			return ty.or(elems)
+		-- plain tuple: direct index
+		return nt[i]
+
+	-- Max length across all branches of an Or{Tuple, ...}, or #nt for a plain tuple.
+	let or_tuple_len = \nt ->
+		if nt.tag == TType.Or
+			var n = 0
+			for _, branch in ipairs(nt)
+				if branch.tag == TType.Tuple
+					n = math.max(n, #branch)
+				else
+					n = math.max(n, 1)
+			return n
+		return #nt
+
 	var infer_exprs = \nodes, start ->
 		var types, t = {}, 0
 		var last = #nodes
 		var first = start or 1
 		for i = first, last, 1
 			var nt = infer_expr(nodes[i])
-			if nt.tag == TType.Tuple
+			if nt.tag == TType.Tuple or nt.tag == TType.Or
 				if i == last
-					for __, v in ipairs(nt)
+					var n = or_tuple_len(nt)
+					for j = 1, n
+						var elem = or_tuple_elem(nt, j) or ty.nil()
 						t = t + 1
-						types[t] = v
+						types[t] = elem
 				else
 					t = t + 1
-					types[t] = nt[1] or ty.nil()
+					types[t] = or_tuple_elem(nt, 1) or ty.nil()
 			else
 				t = t + 1
 				types[t] = nt
