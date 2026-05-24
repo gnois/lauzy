@@ -1,0 +1,180 @@
+let term = require('term')
+let reader = require('lau.read')
+let lex = require('lau.lex')
+let scope = require('lau.scope')
+let parse = require('lau.parse')
+let check = require('lau.check')
+let transform = require('lau.transform')
+let generate = require('lau.generate')
+
+let Circular = {}
+
+var split_lines = \src ->
+	var out = {}
+	if not src
+		return out
+	for line in string.gmatch(src .. "\n", "([^\n\r]*)\r?\n")
+		out[#out + 1] = line
+	return out
+
+var norm_pos = \line, col ->
+	line = tonumber(line) or 1
+	col = tonumber(col) or 1
+	if line < 1
+		line = 1
+	if col < 1
+		col = 1
+	return math.floor(line), math.floor(col)
+
+var caret_pad = \src, col ->
+	if not src or col <= 1
+		return ""
+	var upto = string.sub(src, 1, col - 1)
+	return string.gsub(upto, "[^\t]", " ")
+
+var report = \color, get_source ->
+	-- severity color - 1,2,3
+	var Severe_Color = {color.yellow, color.magenta, color.red}
+	-- array of warnings, ordered by line,col
+	-- must be local, so that repl warnings are cleared
+	var warnings = {}
+	var severe = 0
+	var lines = nil
+	var warn_anchor = {}
+	var total_warns = 0
+
+	return {
+		warn = \line, col, severity, msg ->
+			line, col = norm_pos(line, col)
+			if severity > severe
+				severe = severity
+
+			var key = tostring(line) .. ":" .. tostring(col)
+			var prior = warn_anchor[key]
+			if prior
+				if severity > prior.severity
+					prior.severity = severity
+					prior.msg = msg
+				return
+
+			total_warns = total_warns + 1
+			if total_warns > 20
+				return
+
+			var w = { line = line, col = col, severity = severity, msg = msg }
+			warn_anchor[key] = w
+
+			for i, m in ipairs(warnings)
+				if line < m.line or (line == m.line and col < m.col)
+					-- insert
+					table.insert(warnings, i, w)
+					return
+			-- append
+			table.insert(warnings, w)
+
+		-- convert to colored text
+		, as_text = ->
+			if not lines
+				var src = get_source and get_source() or nil
+				lines = split_lines(src)
+			var warns = {}
+			for i, m in ipairs(warnings)
+				var clr = Severe_Color[m.severity] or color.white
+				var src = lines[m.line]
+				var msg = m.msg
+				if src and #src > 0
+					var col = m.col
+					var maxcol = #src + 1
+					if col > maxcol
+						col = maxcol
+					var pad = caret_pad(src, col)
+					warns[i] = src .. "\n" .. pad .. clr .. "^^" .. color.reset .. " (" .. m.line .. ", " .. m.col .. "): " .. clr .. msg .. color.reset
+				else
+					warns[i] = string.format(" %d,%d:" .. clr ..  "  %s" .. color.reset, m.line, m.col, msg)
+			if #warns > 0
+				return table.concat(warns, "\n")
+
+		-- severity > 2 means its likely to crash the next stage
+		, continue = ->
+			return severe < 3
+
+	}
+
+
+--`
+ options = {
+	declares = {ngx = true, xvars = true, ...}
+	, typecheck = false
+	, single = false
+	, silent = {...}
+ }
+--`
+return \options, color ->
+	var imports = {}
+	var import
+
+	-- returns type, code, warns
+	let compile = \source ->
+		var ast, typ, luacode
+		var s = reader.stream(source)
+
+		var r = report(color, s.text)
+		var lexer = lex(s, r.warn)
+		if r.continue()
+			ast = parse(lexer, r.warn)
+			if ast[1]
+				if r.continue()
+					var sc = scope(options.declares, r.warn)
+					if options.single
+						import = ->
+					typ = check(sc, ast, r.warn, import, options.typecheck)
+					ast = transform(ast)
+					if r.continue()
+						luacode = generate(ast)
+		s.text()
+		return typ, luacode, r.as_text()
+
+
+	-- name follows require('name')
+	-- if verbatim, dots in name is not replaced with slash
+	-- returns type, code, warns
+	import = \name, verbatim ->
+
+		var mod = imports[name]
+		if mod
+			if mod == Circular
+				return false, "circular import of '" .. name .. "'"
+			return mod.type, mod.code, mod.warns
+
+		imports[name] = Circular
+		-- get path by converting . to /
+		--  FIXME: Find out what happens for Lua if require('path.file.1') if /path/file.1.lua exists, but we thought it is /path/file/1/lua.lua
+		var path
+		if verbatim
+			path = name
+		else
+			path = string.gsub(name, "[.]", term.slash)
+		path = path .. ".lau"
+		var fh, err = io.open(path, 'r')
+		if not fh
+			var em = "cannot open import '" .. name .. "' at " .. path
+			if err
+				em = em .. ": " .. err
+			imports[name] = { path = path, type = false, code = nil, warns = em }
+			return false, nil, em, imports
+		fh.close(@)
+		var typ, code, warns = compile(reader.file(path))
+
+		imports[name] = { path = path, type = typ, code = code, warns = warns }
+		return typ, code, warns, imports
+
+
+	return {
+		file = \src ->
+            -- import() expects filename without .lau
+			var f = string.gsub(src, "%.lau", "")
+			return import(f, true)
+
+		, string = \src ->
+			return compile(reader.string(src))
+	}

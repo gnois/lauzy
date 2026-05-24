@@ -1,5 +1,5 @@
 --
--- Generated from inc.lt
+-- Generated from inc.lau
 --
 
 return {eq = function(n, t1, t2)

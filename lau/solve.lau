@@ -1,0 +1,784 @@
+let ty = require('lau.type')
+let Tag = require('lau.tag')
+let TType = Tag.Type
+
+return ->
+	-- list of type var to type expr
+	var subs = {}
+	-- type var metadata for constraint-based subtyping
+	var vars = {}
+	var next_id = 1
+
+	var ensure_var = \node ->
+		assert(node and node.tag == TType.New)
+		if not node.sub
+			node.sub = {}
+		if not node.sup
+			node.sup = {}
+		if not node.level
+			node.level = 0
+		if node.id >= next_id
+			next_id = node.id + 1
+		vars[node.id] = node
+		return node
+
+	var fresh_var = \level ->
+		while vars[next_id] or subs[next_id]
+			next_id = next_id + 1
+		var node = ty.new_var(next_id, level or 0)
+		next_id = next_id + 1
+		return ensure_var(node)
+
+	var push_unique = \list, t ->
+		for _, v in ipairs(list)
+			if v == t or ty.same(v, t)
+				return false
+		list[#list + 1] = t
+		return true
+
+
+	-- Pre-scan a type to find var IDs that appear at BOTH polarities (positive and negative).
+	-- Such vars co-occur and must be kept as named type variables rather than collapsed to Bot/Top,
+	-- preserving the polymorphic relationship (e.g. α->α instead of Any->None).
+	let find_cooccurring = \root ->
+		var pos = {}
+		var neg = {}
+		let scan = \n, pol, seen ->
+			if not n or type(n) ~= 'table'
+				return
+			if n.tag == TType.New
+				ensure_var(n)
+				-- Record polarity BEFORE the seen-guard so that a var appearing in
+				-- both ins (negative) and outs (positive) is counted at BOTH polarities.
+				if pol
+					pos[n.id] = true
+				else
+					neg[n.id] = true
+				-- Use a polarity-aware key to guard against recursive bounds cycles.
+				var key = n.id .. (pol and "+" or "-")
+				if seen[key]
+					return
+				seen[key] = true
+				var rep = subs[n.id]
+				if rep and rep ~= n
+					scan(rep, pol, seen)
+					return
+				var bounds = pol and n.sub or n.sup
+				for _, b in ipairs(bounds)
+					scan(b, pol, seen)
+				return
+			if seen[n]
+				return
+			seen[n] = true
+			if n.tag == TType.Func
+				scan(n.ins, not pol, seen)
+				scan(n.outs, pol, seen)
+				return
+			if n.tag == TType.Tuple or n.tag == TType.Or or n.tag == TType.And
+				for _, v in ipairs(n)
+					scan(v, pol, seen)
+				return
+			if n.tag == TType.Tbl
+				for _, tk in ipairs(n)
+					scan(tk[1], pol, seen)
+					if type(tk[2]) == 'table'
+						scan(tk[2], pol, seen)
+				return
+			if n.tag == TType.Neg
+				scan(n[1], not pol, seen)
+		scan(root, true, {})
+		var co = {}
+		for id in pairs(pos)
+			if neg[id]
+				co[id] = true
+		return co
+
+	let coalesce = \node, pol, seen, co_vars ->
+		pol = pol ~= false
+		seen = seen or {}
+		if not node
+			return ty.nil()
+
+		if node.tag == TType.New
+			ensure_var(node)
+			var rep = subs[node.id]
+			if rep and rep ~= node
+				-- propagate varargs flag when following a substitution
+				-- so that varargs param vars keep their * after being bound to a concrete type
+				var result = coalesce(rep, pol, seen, co_vars)
+				return ty.keep_varargs(node, result)
+			var mark = tostring(node.id) .. (pol and "+" or "-")
+			if seen[mark]
+				return node
+			seen[mark] = true
+			var bounds = pol and node.sub or node.sup
+			-- If this var co-occurs in both polarities, keep it as a named type variable
+			-- (SimpleSub co-occurrence rule) so both positions render with the same name.
+			if #bounds == 0
+				seen[mark] = nil
+				if co_vars and co_vars[node.id]
+					-- Return a stripped copy (tag + id only, no sub/sup/level) so that
+					-- downstream calls to same()/dedup() cannot follow bound cycles.
+					return ty.keep_varargs(node, ty.new_var(node.id, 0, {}, {}))
+				return ty.keep_varargs(node, pol and ty.bot() or ty.top())
+			-- do NOT seed with node itself: coalesce replaces a var with the join/meet of its bounds
+			var out = nil
+			for _, b in ipairs(bounds)
+				var c = coalesce(b, pol, seen, co_vars)
+				if out == nil
+					out = c
+				else if pol
+					out = ty.or({out, c})
+				else
+					out = ty.and({out, c})
+			-- At positive polarity, intersect with the meet of upper bounds so that
+			-- e.g. a var with sub=[nil, str] and sup=[~nil] produces (nil|str)&~nil
+			-- which simplify() can then reduce to str.
+			-- Skip for co-occurring vars since they are kept as named type variables.
+			if pol and #node.sup > 0 and not (co_vars and co_vars[node.id])
+				var sup_out = nil
+				for _, b in ipairs(node.sup)
+					var c = coalesce(b, false, seen, co_vars)
+					if sup_out == nil
+						sup_out = c
+					else
+						sup_out = ty.and({sup_out, c})
+				if sup_out and sup_out.tag ~= TType.Top
+					out = ty.and({out or ty.bot(), sup_out})
+			seen[mark] = nil
+			var result = out or (pol and ty.bot() or ty.top())
+			-- preserve varargs flag: a varargs param var coalescing to Top must stay Top*
+			-- so pvar detection in check_args works after module export simplification
+			return ty.keep_varargs(node, result)
+
+		if node.tag == TType.Func
+			return ty.keep_varargs(node, {
+				tag = TType.Func
+				, ins = coalesce(node.ins, not pol, seen, co_vars)
+				, outs = coalesce(node.outs, pol, seen, co_vars)
+			})
+
+		if node.tag == TType.Tuple
+			var out = {}
+			for i, v in ipairs(node)
+				out[i] = coalesce(v, pol, seen, co_vars)
+			return ty.keep_varargs(node, ty.tuple(out))
+
+		if node.tag == TType.Or
+			var out = {}
+			for i, v in ipairs(node)
+				out[i] = coalesce(v, pol, seen, co_vars)
+			return ty.keep_varargs(node, ty.or(out))
+
+		if node.tag == TType.And
+			var out = {}
+			for i, v in ipairs(node)
+				out[i] = coalesce(v, pol, seen, co_vars)
+			return ty.keep_varargs(node, ty.and(out))
+
+		if node.tag == TType.Tbl
+			var out = {}
+			for i, tk in ipairs(node)
+				var key = tk[2]
+				if "table" == type(key)
+					key = coalesce(key, pol, seen, co_vars)
+				out[i] = { coalesce(tk[1], pol, seen, co_vars), key }
+			return ty.keep_varargs(node, ty.tbl(out))
+
+		-- MLstruct: negation flips polarity
+		if node.tag == TType.Neg
+			return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen, co_vars)))
+
+		if node.tag == TType.Top or node.tag == TType.Bot
+			return node
+
+		return node
+
+	var simplify = \node, pol ->
+		if node
+			var co_vars = find_cooccurring(node)
+			return ty.simplify(coalesce(node, pol ~= false, {}, co_vars), {})
+		return node
+
+	var describe = \node, pol ->
+		if node
+			return ty.tostr(simplify(node, pol ~= false))
+		return "nil"
+
+	------ subst in place --------------
+	let subst = \node, tvar, texp, seen ->
+		assert(tvar.tag == TType.New)
+		if not node or "table" ~= type(node)
+			return node
+		if node.tag == TType.New
+			if node.id == tvar.id
+				return texp
+			return node
+		seen = seen or {}
+		if seen[node]
+			return node
+		seen[node] = true
+		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+			for i = 1, #node
+				node[i] = subst(node[i], tvar, texp, seen)
+			return node
+		if node.tag == TType.Func
+			node.ins = subst(node.ins, tvar, texp, seen)
+			node.outs = subst(node.outs, tvar, texp, seen)
+			return node
+		if node.tag == TType.Tbl
+			for i = 1, #node
+				node[i] = { subst(node[i][1], tvar, texp, seen), node[i][2] and subst(node[i][2], tvar, texp, seen) }
+			return node
+		if node.tag == TType.Neg
+			node[1] = subst(node[1], tvar, texp, seen)
+			return node
+		return node
+
+
+	------ apply in place --------------
+	let apply = \node, seen ->
+		if not node or "table" ~= type(node)
+			return node
+		if node.tag == TType.New
+			ensure_var(node)
+			return subs[node.id] or node
+		seen = seen or {}
+		if seen[node]
+			return node
+		seen[node] = true
+		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+			for i = 1, #node
+				node[i] = apply(node[i], seen)
+			return node
+		if node.tag == TType.Func
+			node.ins = apply(node.ins, seen)
+			node.outs = apply(node.outs, seen)
+			return node
+		if node.tag == TType.Tbl
+			for i = 1, #node
+				node[i] = { apply(node[i][1], seen), node[i][2] and apply(node[i][2], seen) }
+			return node
+		if node.tag == TType.Neg
+			return ty.keep_varargs(node, ty.neg(apply(node[1], seen)))
+		return node
+
+
+	------ occur --------------
+	let occurs = \x, y, seen ->
+		y = apply(y)
+		if not y
+			return false
+		seen = seen or {}
+		if y and type(y) == "table"
+			if seen[y]
+				return false
+			seen[y] = true
+		if y.tag == TType.New
+			return x.id == y.id
+		if y.tag == TType.Tuple or y.tag == TType.Or or y.tag == TType.And
+			for _, t in ipairs(y)
+				if occurs(x, t, seen)
+					return true
+			return false
+		if y.tag == TType.Func
+			return occurs(x, y.ins, seen) or occurs(x, y.outs, seen)
+		if y.tag == TType.Tbl
+			for _, tk in ipairs(y)
+				if occurs(x, tk[1], seen) or (tk[2] and occurs(x, tk[2], seen))
+					return true
+			return false
+		if y.tag == TType.Neg
+			return occurs(x, y[1], seen)
+		return false
+
+
+	var extend = \tvar, texp, ignore ->
+		if not tvar or tvar.tag ~= TType.New
+			return false, ignore and "" or ("cannot extend non-typevar " .. (tvar and ty.tostr(tvar) or "nil"))
+		ensure_var(tvar)
+		if occurs(tvar, texp)
+			return false, ignore and "" or ("contains recursive type " .. ty.tostr(tvar) .. " in " .. ty.tostr(texp))
+
+		for id, t in ipairs(subs)
+			subs[id] = subst(t, tvar, texp)
+		subs[tvar.id] = texp
+		return tvar
+
+
+	------ subtyping constraints (MVP) --------------
+	var seen_pair = \cache, lhs, rhs ->
+		var row = cache[lhs]
+		if not row
+			row = {}
+			cache[lhs] = row
+		if row[rhs]
+			return true
+		row[rhs] = true
+		return false
+
+	var same_key = \a, b ->
+		if "string" == type(a) or "string" == type(b)
+			return a == b
+		return ty.same(a, b)
+
+	var find_field = \tbl, key ->
+		for _, tk in ipairs(tbl)
+			if tk[2] and same_key(tk[2], key)
+				return tk[1]
+		return nil
+
+	var key_tostr = \key ->
+		if "string" == type(key)
+			return key
+		return describe(key)
+
+	var constrain
+
+	var tuple_shape = \t ->
+		var n = #t
+		if n > 0 and t[n] and t[n].varargs
+			return "at least " .. (n - 1)
+		return tostring(n)
+
+	var tuple_render = \t ->
+		return describe(ty.tuple(t))
+
+	var constrain_tuple = \lhs, rhs, contra, cache ->
+		var ln, rn = #lhs, #rhs
+		var ltail = ln > 0 and lhs[ln] and lhs[ln].varargs and lhs[ln] or nil
+		var rtail = rn > 0 and rhs[rn] and rhs[rn].varargs and rhs[rn] or nil
+		var mismatch = "tuple arity mismatch: expected " .. tuple_shape(rhs) .. " " .. tuple_render(rhs) .. ", got " .. tuple_shape(lhs) .. " " .. tuple_render(lhs)
+		var i, n = 0, ln > rn and ln or rn
+		while i < n
+			i = i + 1
+			var l = lhs[i]
+			var r = rhs[i]
+			if not l
+				if not r
+					break
+				if contra
+					if not ltail
+						return false, mismatch
+					l = ltail
+				else
+					if r.varargs and i == rn
+						return true
+					return false, mismatch
+			else if not r
+				if contra
+					if l.varargs and i == ln
+						return true
+					return false, mismatch
+				if not rtail
+					return false, mismatch
+				r = rtail
+			var ok, err
+			if contra
+				ok, err = constrain(r, l, cache)
+			else
+				ok, err = constrain(l, r, cache)
+			if not ok
+				return false, err
+		return true
+
+	var bind_upper = \lhs_var, rhs, cache ->
+		ensure_var(lhs_var)
+		rhs = apply(rhs)
+		if rhs.tag == TType.New and rhs.id == lhs_var.id
+			return true
+		push_unique(lhs_var.sup, rhs)
+		for _, low in ipairs(lhs_var.sub)
+			var ok, err = constrain(low, rhs, cache)
+			if not ok
+				return false, err
+		return true
+
+	var bind_lower = \rhs_var, lhs, cache ->
+		ensure_var(rhs_var)
+		lhs = apply(lhs)
+		if lhs.tag == TType.New and lhs.id == rhs_var.id
+			return true
+		push_unique(rhs_var.sub, lhs)
+		for _, up in ipairs(rhs_var.sup)
+			var ok, err = constrain(lhs, up, cache)
+			if not ok
+				return false, err
+		return true
+
+	let level_of = \node ->
+		node = apply(node)
+		if not node
+			return 0
+		if node.tag == TType.New
+			ensure_var(node)
+			return node.level or 0
+		if node.tag == TType.Func
+			return math.max(level_of(node.ins), level_of(node.outs))
+		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+			var lvl = 0
+			for _, v in ipairs(node)
+				lvl = math.max(lvl, level_of(v))
+			return lvl
+		if node.tag == TType.Tbl
+			var lvl = 0
+			for _, tk in ipairs(node)
+				lvl = math.max(lvl, level_of(tk[1]))
+				if "table" == type(tk[2])
+					lvl = math.max(lvl, level_of(tk[2]))
+			return lvl
+		if node.tag == TType.Neg
+			return level_of(node[1])
+		return 0
+
+	let extrude = \node, pol, lim, cache ->
+		node = apply(node)
+		cache = cache or {}
+		if not node
+			return node
+		if node.tag == TType.New
+			ensure_var(node)
+			if (node.level or 0) <= lim
+				return node
+			var key = tostring(node.id) .. ":" .. (pol and "p" or "n")
+			var nv = cache[key]
+			if nv
+				return nv
+			nv = fresh_var(lim)
+			cache[key] = nv
+			if pol
+				push_unique(node.sup, nv)
+				for _, b in ipairs(node.sub)
+					nv.sub[#nv.sub + 1] = extrude(b, pol, lim, cache)
+			else
+				push_unique(node.sub, nv)
+				for _, b in ipairs(node.sup)
+					nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache)
+			return ty.keep_varargs(node, nv)
+		if node.tag == TType.Func
+			return ty.keep_varargs(node, {
+				tag = TType.Func
+				, ins = extrude(node.ins, not pol, lim, cache)
+				, outs = extrude(node.outs, pol, lim, cache)
+			})
+		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+			var out = {}
+			for i, v in ipairs(node)
+				out[i] = extrude(v, pol, lim, cache)
+			return ty.keep_varargs(node, { tag = node.tag, unpack(out) })
+		if node.tag == TType.Tbl
+			var out = {}
+			for i, tk in ipairs(node)
+				var key = tk[2]
+				if "table" == type(key)
+					key = extrude(key, pol, lim, cache)
+				out[i] = { extrude(tk[1], pol, lim, cache), key }
+			return ty.keep_varargs(node, ty.tbl(out))
+		-- MLstruct: negation flips polarity on extrude
+		if node.tag == TType.Neg
+			return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache)))
+		return node
+
+	var instantiate = \tyexp, lim, to_lvl ->
+		lim = lim or 0
+		to_lvl = to_lvl or lim
+		var freshened = {}
+
+		-- Returns true if node contains any type var at level > lim.
+		-- Bounds that don't contain high-level vars are concrete callee-body
+		-- constraints and must not be propagated to the caller's fresh instance.
+		let has_high_var = \node, seen ->
+			node = apply(node)
+			if not node or type(node) ~= 'table'
+				return false
+			seen = seen or {}
+			if seen[node]
+				return false
+			seen[node] = true
+			if node.tag == TType.New
+				ensure_var(node)
+				if (node.level or 0) > lim
+					return true
+				for _, b in ipairs(node.sub)
+					if has_high_var(b, seen) return true
+				for _, b in ipairs(node.sup)
+					if has_high_var(b, seen) return true
+				return false
+			if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+				for _, v in ipairs(node)
+					if has_high_var(v, seen) return true
+				return false
+			if node.tag == TType.Func
+				return has_high_var(node.ins, seen) or has_high_var(node.outs, seen)
+			if node.tag == TType.Tbl
+				for _, tk in ipairs(node)
+					if has_high_var(tk[1], seen) return true
+					if type(tk[2]) == 'table' and has_high_var(tk[2], seen) return true
+				return false
+			if node.tag == TType.Neg
+				return has_high_var(node[1], seen)
+			return false
+
+		let rec = \node ->
+			node = apply(node)
+			if node.tag == TType.New
+				ensure_var(node)
+				if node.level <= lim
+					return node
+				var fv = freshened[node.id]
+				if fv
+					return fv
+				fv = fresh_var(to_lvl)
+				freshened[node.id] = fv
+				for _, b in ipairs(node.sub)
+					if has_high_var(b)
+						fv.sub[#fv.sub + 1] = rec(b)
+				for _, b in ipairs(node.sup)
+					if has_high_var(b)
+						fv.sup[#fv.sup + 1] = rec(b)
+				return ty.keep_varargs(node, fv)
+			if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
+				var out = {}
+				for i, v in ipairs(node)
+					out[i] = rec(v)
+				return ty.keep_varargs(node, { tag = node.tag, unpack(out) })
+			if node.tag == TType.Func
+				return ty.keep_varargs(node, {
+					tag = TType.Func
+					, ins = rec(node.ins)
+					, outs = rec(node.outs)
+				})
+			if node.tag == TType.Tbl
+				var out = {}
+				for i, tk in ipairs(node)
+					out[i] = { rec(tk[1]), tk[2] and rec(tk[2]) or tk[2] }
+				return ty.keep_varargs(node, ty.tbl(out))
+			if node.tag == TType.Neg
+				return ty.keep_varargs(node, ty.neg(rec(node[1])))
+			return node
+
+		return rec(tyexp)
+
+	constrain = \lhs, rhs, cache ->
+		lhs = apply(lhs)
+		rhs = apply(rhs)
+		cache = cache or {}
+
+		if lhs == rhs
+			return true
+
+		if seen_pair(cache, lhs, rhs)
+			return true
+
+		if rhs.tag == TType.Top or lhs.tag == TType.Bot
+			return true
+
+		if lhs.tag == TType.Top and rhs.tag ~= TType.Top
+			return false, "cannot constrain Any to narrower type"
+
+		if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot
+			return false, "cannot constrain non-bottom to None"
+
+		-- MLstruct: negation constraint rules
+		-- lhs <: ~rinner  holds iff lhs and rinner are disjoint
+		if rhs.tag == TType.Neg
+			var rinner = rhs[1]
+			-- ~A <: ~B iff B <: A (contravariance of negation)
+			if lhs.tag == TType.Neg
+				return constrain(rinner, lhs[1], cache)
+			-- bot <: anything
+			if lhs.tag == TType.Bot
+				return true
+			-- type var: record ~rinner as an upper bound so the constraint propagates
+			if lhs.tag == TType.New
+				return bind_upper(ensure_var(lhs), rhs, cache)
+			-- A | B <: ~C  iff  A <: ~C  AND  B <: ~C
+			if lhs.tag == TType.Or
+				for _, t in ipairs(lhs)
+					var ok, err = constrain(t, rhs, cache)
+					if not ok
+						return false, err
+				return true
+			-- De Morgan: lhs <: ~(A | B)  iff  lhs <: ~A AND lhs <: ~B
+			if rinner.tag == TType.Or
+				for _, t in ipairs(rinner)
+					var ok, err = constrain(lhs, ty.neg(t), cache)
+					if not ok
+						return false, err
+				return true
+			-- De Morgan: lhs <: ~(A & B)  iff  lhs <: ~A OR lhs <: ~B
+			if rinner.tag == TType.And
+				for _, t in ipairs(rinner)
+					var ok = constrain(lhs, ty.neg(t), cache)
+					if ok
+						return true
+				return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+			-- Same-family checks: types in the same family are NOT disjoint, fail
+			-- nil <: ~nil: nil is not disjoint from nil
+			if lhs.tag == TType.Nil and rinner.tag == TType.Nil
+				return false, "expects " .. describe(rhs) .. ", got nil"
+			-- Val(t) <: ~Val(t2): disjoint iff t != t2
+			if lhs.tag == TType.Val and rinner.tag == TType.Val
+				if lhs.type == rinner.type
+					return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+				return true
+			-- Val or Nil vs Func/Tbl: always disjoint
+			if (lhs.tag == TType.Val or lhs.tag == TType.Nil) and (rinner.tag == TType.Func or rinner.tag == TType.Tbl)
+				return true
+			-- Func/Tbl vs Val or Nil: always disjoint
+			if (lhs.tag == TType.Func or lhs.tag == TType.Tbl) and (rinner.tag == TType.Val or rinner.tag == TType.Nil)
+				return true
+			-- Func vs Tbl: always disjoint
+			if lhs.tag == TType.Func and rinner.tag == TType.Tbl
+				return true
+			if lhs.tag == TType.Tbl and rinner.tag == TType.Func
+				return true
+			-- Same complex family (Func/Tbl both): cannot prove disjointness statically
+			return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+
+		-- ~lhs_inner <: rhs
+		if lhs.tag == TType.Neg
+			-- ~A <: ~B already handled above in rhs.tag == Neg
+			if rhs.tag == TType.Top
+				return true
+			-- type var on rhs: record ~lhs as a lower bound
+			if rhs.tag == TType.New
+				return bind_lower(ensure_var(rhs), lhs, cache)
+			-- ~A <: B | C: try each alternative (delegate back to constrain)
+			if rhs.tag == TType.Or
+				for _, t in ipairs(rhs)
+					var ok = constrain(lhs, t, cache)
+					if ok
+						return true
+				return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+			-- ~A <: B & C: must satisfy all parts
+			if rhs.tag == TType.And
+				for _, t in ipairs(rhs)
+					var ok, err = constrain(lhs, t, cache)
+					if not ok
+						return false, err
+				return true
+			-- ~A <: concrete: only true when ~Bot (= Top) <: anything, already handled above.
+			-- ~Val(t) <: Val(t2): the complement of a primitive is NOT a subtype of another primitive
+			-- because it includes values of all other families too.
+			-- ~nil <: Val/Func/Tbl: similarly, ~nil is not a subtype of any concrete type.
+			-- All concrete rhs cases fall through to false.
+			return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+
+		if lhs.tag == TType.New
+			var lhsv = ensure_var(lhs)
+			if level_of(rhs) <= lhsv.level
+				return bind_upper(lhsv, rhs, cache)
+			var rhsx = extrude(rhs, false, lhsv.level, {})
+			return constrain(lhsv, rhsx, cache)
+
+		if rhs.tag == TType.New
+			var rhsv = ensure_var(rhs)
+			if level_of(lhs) <= rhsv.level
+				return bind_lower(rhsv, lhs, cache)
+			var lhsx = extrude(lhs, true, rhsv.level, {})
+			return constrain(lhsx, rhsv, cache)
+
+		if lhs.tag == TType.Or
+			for _, t in ipairs(lhs)
+				var ok, err = constrain(t, rhs, cache)
+				if not ok
+					return false, err
+			return true
+
+		if rhs.tag == TType.Or
+			-- lhs <: A | B: satisfied if lhs fits any alternative.
+			-- If lhs is a type variable, a failed branch may have mutated its bounds (via bind_upper/bind_lower).
+			-- We do a lightweight rollback by remembering just the bound-list lengths before each attempt.
+			-- For concrete lhs no bounds are mutated, so no rollback is needed.
+			var last_err = "cannot match any part of union"
+			if lhs.tag == TType.New
+				var lhsv = ensure_var(lhs)
+				for _, t in ipairs(rhs)
+					var sub_n = #lhsv.sub
+					var sup_n = #lhsv.sup
+					var ok, err = constrain(lhs, t, cache)
+					if ok
+						return true
+					-- rollback any bounds appended during this failed attempt
+					while #lhsv.sub > sub_n
+						lhsv.sub[#lhsv.sub] = nil
+					while #lhsv.sup > sup_n
+						lhsv.sup[#lhsv.sup] = nil
+					last_err = err or last_err
+			else
+				for _, t in ipairs(rhs)
+					var ok, err = constrain(lhs, t, cache)
+					if ok
+						return true
+					last_err = err or last_err
+			return false, last_err
+
+		if lhs.tag == TType.And
+			-- First, try simplifying the intersection: e.g. (nil|str)&~nil simplifies to str.
+			-- This allows constraints like ((nil|str)&~nil) <: str|num to succeed.
+			var slhs = simplify(lhs)
+			if slhs.tag ~= TType.And
+				return constrain(slhs, rhs, cache)
+			var last_err = "cannot constrain intersection"
+			for _, t in ipairs(lhs)
+				var ok, err = constrain(t, rhs, cache)
+				if ok
+					return true
+				last_err = err or last_err
+			return false, last_err
+
+		if rhs.tag == TType.And
+			for _, t in ipairs(rhs)
+				var ok, err = constrain(lhs, t, cache)
+				if not ok
+					return false, err
+			return true
+
+		if lhs.tag == TType.Tuple
+			if rhs.tag == TType.Tuple
+				return constrain_tuple(lhs, rhs, false, cache)
+			return constrain(lhs[1] or ty.nil(), rhs, cache)
+
+		if rhs.tag == TType.Tuple
+			return constrain(lhs, rhs[1] or ty.nil(), cache)
+
+		if lhs.tag == rhs.tag
+			if lhs.tag == TType.Nil
+				return true
+			if lhs.tag == TType.Val
+				if lhs.type == rhs.type
+					return true
+				return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+			if lhs.tag == TType.Func
+				var lhs_outs = lhs.outs or ty.tuple_none()
+				var rhs_outs = rhs.outs or ty.tuple_none()
+				var ok, err = constrain_tuple(lhs.ins, rhs.ins, true, cache)
+				if not ok
+					return false, err
+				ok, err = constrain(lhs_outs, rhs_outs, cache)
+				if not ok
+					return false, err
+				return true
+			if lhs.tag == TType.Tbl
+				for _, tk in ipairs(rhs)
+					if tk[2]
+						var lv = find_field(lhs, tk[2])
+						if not lv
+							return false, "missing required field `" .. key_tostr(tk[2]) .. "` in " .. describe(lhs)
+						var ok, err = constrain(lv, tk[1], cache)
+						if not ok
+							return false, err
+				return true
+
+		return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+
+	return {
+		apply = apply
+		, fresh_var = fresh_var
+		, instantiate = instantiate
+		, describe = describe
+		, simplify = simplify
+		, extend = extend
+		, constrain = constrain
+	}

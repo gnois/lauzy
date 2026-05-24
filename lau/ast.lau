@@ -1,0 +1,115 @@
+let Tag = require('lau.tag')
+
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
+let TType = Tag.Type
+
+let make = \tag, node, loc ->
+	assert('table' == type(node))
+	assert('number' == type(loc.line))
+	assert('number' == type(loc.col))
+	node.tag = tag
+	node.line = loc.line
+	node.col = loc.col
+	return node
+
+var Statement = {
+	expression = \expr, ls ->
+		return make(TStmt.Expr, {expr = expr}, ls)
+
+	, assign = \lhs, rhs, ls ->
+		return make(TStmt.Assign, {lefts = lhs, rights = rhs}, ls)
+
+	, local = \vars, exprs, ls ->
+		return make(TStmt.Local, {vars = vars, exprs = exprs}, ls)
+
+	, let = \vars, exprs, ls ->
+		return make(TStmt.Let, {vars = vars, exprs = exprs}, ls)
+
+	, do = \body, ls ->
+		return make(TStmt.Do, {body = body}, ls)
+
+	, if = \tests, thenss, elses, ls ->
+		return make(TStmt.If, {tests = tests, thenss = thenss, elses = elses}, ls)
+
+	, forin = \vars, exprs, body, ls ->
+		return make(TStmt.Forin, {vars = vars, exprs = exprs, body = body}, ls)
+
+	, fornum = \var, first, last, step, body, ls ->
+		return make(TStmt.Fornum, {var = var, first = first, last = last, step = step, body = body}, ls)
+
+	, while = \test, body, ls ->
+		return make(TStmt.While, {test = test, body = body}, ls)
+
+	, repeat = \test, body, ls ->
+		return make(TStmt.Repeat, {test = test, body = body}, ls)
+
+	, return = \exprs, ls ->
+		return make(TStmt.Return, {exprs = exprs}, ls)
+
+	, break = \ls ->
+		return make(TStmt.Break, {}, ls)
+
+	, goto = \name, ls ->
+		return make(TStmt.Goto, {name = name}, ls)
+
+	, label = \name, ls ->
+		return make(TStmt.Label, {name = name}, ls)
+}
+
+var Expression = {
+	nil = \ls ->
+		return make(TExpr.Nil, {}, ls)
+
+	, vararg = \ls ->
+		return make(TExpr.Vararg, {}, ls)
+
+	, id = \name, ls ->
+		return make(TExpr.Id, {name = name}, ls)
+
+	, bool = \val, ls ->
+		return make(TExpr.Bool, {value = val}, ls)
+
+	, number = \val, ls ->
+		return make(TExpr.Number, {value = val}, ls)
+
+	, string = \val, long, ls ->
+		return make(TExpr.String, {value = val, long = long}, ls)
+
+	, function = \params, body, ls ->
+		return make(TExpr.Function, {params = params, body = body}, ls)
+
+	, table = \valkeys, ls ->
+		return make(TExpr.Table, {valkeys = valkeys}, ls)
+
+	, index = \obj, idx, ls ->
+		return make(TExpr.Index, {obj = obj, idx = idx}, ls)
+
+	, field = \obj, field, ls ->
+		return make(TExpr.Field, {obj = obj, field = field}, ls)
+
+	, invoke = \obj, field, args, ls ->
+		return make(TExpr.Invoke, {obj = obj, field = field, args = args}, ls)
+
+	, call = \func, args, ls ->
+		return make(TExpr.Call, {func = func, args = args}, ls)
+
+	, unary = \op, right, ls ->
+		return make(TExpr.Unary, {op = op, right = right}, ls)
+
+	, binary = \op, left, right, ls ->
+		return make(TExpr.Binary, {op = op, left = left, right = right}, ls)
+}
+
+
+var bracket = \node ->
+	assert(TExpr[node.tag] or TType[node.tag])  -- must be expression or type node
+	node.bracketed = true
+	return node
+
+
+return {
+	Stmt = Statement
+	, Expr = Expression
+	, bracket = bracket
+}

@@ -1,5 +1,5 @@
 local term = require("term")
-local compiler = require("lt.compile")
+local compiler = require("lau.compile")
 
 local slash = term.slash
 local color = term.color
@@ -68,7 +68,7 @@ print('Scanning ' .. folder .. ' folder...')
 
 local files = scandir(folder)
 for k, v in pairs(files) do
-    if #v > 0 and string.sub(v, -string.len('.lt'))=='.lt' then
+    if #v > 0 and string.sub(v, -string.len('.lau'))=='.lau' then
         print('\n' .. v .. ':')
         filename = folder .. slash .. v
         local _, code, warns = compile.file(filename)
@@ -92,7 +92,7 @@ folder = folder .. slash .. 'fails'
 print('Scanning ' .. folder .. ' folder...')
 files = scandir(folder)
 for k, v in pairs(files) do
-    if #v > 0 and string.sub(v, -string.len('.lt'))=='.lt' then
+    if #v > 0 and string.sub(v, -string.len('.lau'))=='.lau' then
         print('\n' .. v .. ':')
         filename = folder .. slash .. v
         local _, code, warns = compile.file(filename)

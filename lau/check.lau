@@ -1,0 +1,717 @@
+let ty = require('lau.type')
+let Tag = require('lau.tag')
+let solve = require('lau.solve')
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
+let TType = Tag.Type
+
+
+let relational = \op ->
+	return op == '>' or op == '>=' or op == '<' or op == '<=' or op == '==' or op == '~='
+
+let arithmetic = \op ->
+	return op == '+' or op == '-' or op == '*' or op == '/' or op == '^'
+
+return \scope, stmts, warn, import, typecheck ->
+
+	var Stmt = {}
+	var Expr = {}
+	var solv = solve()
+	var lvl = 0
+
+	var with_lvl = \delta, fn, ... ->
+		var prev = lvl
+		lvl = lvl + (delta or 0)
+		var ok, out = pcall(fn, ...)
+		lvl = prev
+		if not ok
+			error(out, 0)
+		return out
+
+	var new = \level ->
+		return solv.fresh_var(level or lvl)
+
+	var fail = \node, node_type ->
+		if node
+			var msg = (node.tag or 'nil') .. " cannot match " .. node_type .. " type"
+			if node.line and node.col
+				warn(node.line, node.col, 3, msg)
+				return
+		error("node is nil or missing line and column info")
+
+	var maybe_self = \name ->
+		if name == '@'
+			return 'self'
+		return name
+
+	var declare = \var, vtype ->
+		assert(var.tag == TExpr.Id)
+		var name = maybe_self(var.name)
+		scope.new_var(name, vtype, var.line, var.col)
+
+	var declared_type = \var ->
+		assert(var.tag == TExpr.Id)
+		var name = maybe_self(var.name)
+		var __, t = scope.declared(name)
+		return t
+
+	var is_string_index = \idx, it ->
+		return idx and idx.tag == TExpr.String and it and it.tag == TType.Val and it.type == "str"
+
+	var callable_name = \func ->
+		if not func
+			return nil
+		if func.tag == TExpr.Id
+			return maybe_self(func.name)
+		if func.tag == TExpr.Field
+			return func.field
+		if func.tag == TExpr.Index and func.idx and func.idx.tag == TExpr.String
+			return func.idx.value
+		return nil
+
+	var check = \expected, actual, node, msg ->
+		if typecheck
+			var ok, err = solv.constrain(actual, expected)
+			if not ok
+				var act = solv.describe(actual)
+				var exp = solv.describe(expected)
+				var eup = solv.describe(expected, false)
+				-- When upper bound differs from lower bound, the snapshot should show the upper
+				-- bound (what the constraint actually failed against), not the lower bound (which
+				-- would appear to match and confuse the reader).
+				var snap_exp = (eup ~= exp) and eup or exp
+				var snapshot = ' [ ' .. act .. " <: " .. snap_exp .. ' ]'
+				if eup ~= exp
+					snapshot = snapshot .. "  (lower: " .. exp .. ")"
+				warn(node.line, node.col, 1, msg .. err .. snapshot)
+			return ok and actual or false
+		return expected
+
+	var op_msg = \op, expr, side ->
+		var name = callable_name(expr)
+		if name
+			if side
+				return side .. " operand `" .. name .. "` of operator `" .. op .. "` "
+			return "operand `" .. name .. "` of operator `" .. op .. "` "
+		if side
+			return side .. " operand of `" .. op .. "` "
+		return "operator `" .. op .. "` "
+
+	var check_op = \expected, actual, node, op, expr, side ->
+		-- operators like arithmetics can be overloaded via metatable, and we dont handle that yet, so as long as types are equal, let it pass for now
+		-- check expected against actual for now, bcoz probably most literal appears right
+		return check(expected, actual, node, op_msg(op, expr, side))
+
+	var assign_msg = \node ->
+		if node.tag == TExpr.Field
+			var field = "`" .. node.field .. "` "
+			var recv = callable_name(node.obj)
+			if recv
+				return "receiver `" .. recv .. "` for " .. field
+			return field
+		if node.tag == TExpr.Index
+			var recv = callable_name(node.obj)
+			if node.idx and node.idx.tag == TExpr.String
+				var field = "`" .. node.idx.value .. "` "
+				if recv
+					return "receiver `" .. recv .. "` for " .. field
+				return field
+			if recv
+				return "receiver `" .. recv .. "` indexed "
+			return "indexed "
+
+	var check_field = \otype, field, node ->
+		var t = solv.apply(otype)
+		var receiver = nil
+		if node and node.obj
+			receiver = callable_name(node.obj)
+		var msg = "`" .. field .. "` "
+		if receiver
+			msg = "receiver `" .. receiver .. "` for " .. msg
+		if check(ty.tbl({}), t, node, msg)
+			var tbl = ty.get_tbl(t)
+			if tbl
+				for _, tk in ipairs(tbl)
+					if tk[2] == field
+						return tk[1], t
+				-- key doesnt exist
+				var vt = new()
+				tbl[#tbl + 1] = { vt, field }
+				return vt, t
+		return new(), t
+
+	var check_args = \ins, atypes, node, fname ->
+		var params = ins or ty.tuple_none()
+		var pn = #params
+		var an = #atypes
+		var pvar = nil
+		if pn > 0 and params[pn] and params[pn].varargs
+			pvar = params[pn]
+
+		var arity_shape = \types, n, has_varargs ->
+			if has_varargs
+				return "at least " .. (n - 1)
+			return tostring(n)
+
+		var expected_arity = arity_shape(params, pn, pvar ~= nil)
+		var avar = an > 0 and atypes[an] and atypes[an].varargs
+		var actual_arity = arity_shape(atypes, an, avar)
+
+		var arity_msg = \ ->
+			var who = "function "
+			if fname
+				who = who .. "`" .. fname .. "` "
+			var expected_tuple = ty.tostr(params)
+			var actual_tuple = ty.tostr(ty.tuple(atypes))
+			return who .. "expects " .. expected_arity .. " arguments " .. expected_tuple .. ", got " .. actual_arity .. " " .. actual_tuple
+
+		for i = 1, an
+			var actual = atypes[i]
+			var expected = params[i]
+			if not expected
+				if pvar
+					expected = pvar
+				else
+					if actual and actual.varargs
+						return true
+					warn(node.line, node.col, 1, arity_msg())
+					return false
+			if not check(expected, actual, node, "argument " .. i .. " ")
+				return false
+
+		for i = an + 1, pn
+			var expected = params[i]
+			if expected and not expected.varargs
+				warn(node.line, node.col, 1, arity_msg())
+				return false
+			if expected and expected.varargs
+				break
+		return true
+
+
+	var check_fn = \ftype, atypes, node, fname ->
+		if typecheck
+			var fn = solv.apply(ftype)
+			var expected = ty.func(ty.tuple(atypes), ty.tuple({ty.varargs(new())}))
+			if fn.tag == TType.New
+				solv.extend(fn, expected)
+			else if fn.tag == TType.Func
+				var args_ok = check_args(fn.ins, atypes, node, fname)
+				if fn.outs and args_ok ~= false
+					return fn.outs
+			--``
+			else if fn.tag == TType.Nil or fn.tag == TType.Val
+				var fname_msg = ""
+				if fname
+					fname_msg = "`" .. fname .. "` which is "
+				warn(node.line, node.col, 1, "trying to call " .. fname_msg .. ty.tostr(fn))
+			``
+			else
+				var fname_msg = ""
+				if fname
+					fname_msg = "`" .. fname .. "` "
+				check(expected, fn, node, fname_msg)
+				if fn.outs
+					return fn.outs
+		return ty.tuple({ty.varargs(new())})
+
+
+	var check_stmts = \nodes ->
+		for _, node in ipairs(nodes)
+			var rule = Stmt[node.tag]
+			if rule
+				rule(node)
+			else
+				fail(node, "statement")
+
+	var check_block = \nodes ->
+		scope.enter()
+		var ok, err = pcall(check_stmts, nodes)
+		scope.leave()
+		if not ok
+			error(err, 0)
+
+	var infer_expr = \node ->
+		var rule = Expr[node.tag]
+		if rule
+			return rule(node)
+		fail(node, "expression")
+		return new()
+
+	-- Extract the i-th element from a type that may be Or{Tuple, Tuple, ...}.
+	-- Returns nil if i is out of range for all branches.
+	let or_tuple_elem = \nt, i ->
+		if nt.tag == TType.Or
+			var elems = {}
+			for _, branch in ipairs(nt)
+				if branch.tag == TType.Tuple
+					elems[#elems + 1] = branch[i] or ty.nil()
+				else
+					-- non-tuple branch: treat as single-value
+					elems[#elems + 1] = (i == 1) and branch or ty.nil()
+			if #elems == 0
+				return nil
+			if #elems == 1
+				return elems[1]
+			return ty.or(elems)
+		-- plain tuple: direct index
+		return nt[i]
+
+	-- Max length across all branches of an Or{Tuple, ...}, or #nt for a plain tuple.
+	let or_tuple_len = \nt ->
+		if nt.tag == TType.Or
+			var n = 0
+			for _, branch in ipairs(nt)
+				if branch.tag == TType.Tuple
+					n = math.max(n, #branch)
+				else
+					n = math.max(n, 1)
+			return n
+		return #nt
+
+	var infer_exprs = \nodes, start ->
+		var types, t = {}, 0
+		var last = #nodes
+		var first = start or 1
+		for i = first, last, 1
+			var nt = infer_expr(nodes[i])
+			if nt.tag == TType.Tuple or nt.tag == TType.Or
+				if i == last
+					var n = or_tuple_len(nt)
+					for j = 1, n
+						var elem = or_tuple_elem(nt, j) or ty.nil()
+						t = t + 1
+						types[t] = elem
+				else
+					t = t + 1
+					types[t] = or_tuple_elem(nt, 1) or ty.nil()
+			else
+				t = t + 1
+				types[t] = nt
+		return types
+
+	var balance_check = \lefts, rights ->
+		var r = #rights
+		var l = #lefts
+		if r > l
+			warn(rights[1].line, rights[1].col, 1, "assigning " .. r .. " values to " .. l .. " variable(s)")
+
+	--------- Expressions --------------------
+	Expr[TExpr.Nil] = ->
+		return ty.nil()
+
+	Expr[TExpr.Bool] = ->
+		return ty.bool()
+
+	Expr[TExpr.Number] = ->
+		return ty.num()
+
+	Expr[TExpr.String] = ->
+		return ty.str()
+
+	Expr[TExpr.Vararg] = \node ->
+		if not scope.is_varargs()
+			warn(node.line, node.col, 2, "cannot use `...` in a function without variable arguments")
+		return ty.varargs(new())
+
+	Expr[TExpr.Id] = \node ->
+		var line, t = nil, new()
+		if node.name  -- node.name can be nil, bcoz the parser continues despite error
+			var name = maybe_self(node.name)
+			line, t = scope.declared(name)
+			if line == 0
+				warn(node.line, node.col, 1, "undeclared identifier `" .. node.name .. "`")
+			if not t
+				t = new()
+			else
+				t = solv.instantiate(t, lvl, lvl)
+		return t
+
+	Expr[TExpr.Function] = \node ->
+		scope.begin_func()
+
+		var ptypes = {}
+		for i, p in ipairs(node.params)
+			var t = new()
+			if p.tag == TExpr.Vararg
+				scope.varargs()
+				t = ty.varargs(t)
+			else
+				declare(p, t)
+			ptypes[i] = t
+
+		check_block(node.body)
+		var rtuple = scope.get_returns() or ty.tuple({ty.nil()})
+		scope.end_func()
+		return ty.func(ty.tuple(ptypes), rtuple)
+
+	Expr[TExpr.Table] = \node ->
+		-- check for duplicate key
+		var keys = {}
+		for i, vk in ipairs(node.valkeys)
+			var key = vk[2]
+			if key
+				for n = 1, #keys
+					if keys[n] and ty.same(keys[n], key)
+						warn(key.line, key.col, 2, "duplicate keys at position " .. i .. " and " .. n .. " in table")
+			keys[i] = key
+
+		-- type check
+		var tytys = {}
+		var vtyped = false
+		var vtype
+		for _, vk in ipairs(node.valkeys)
+			var vt, kt
+			vt = infer_expr(vk[1])
+			kt = vk[2] and infer_expr(vk[2])
+			if kt
+				if kt.tag == TType.Val and kt.type == "str"
+					-- take the string literal
+					tytys[#tytys + 1] = { vt, vk[2].value }
+				else
+					tytys[#tytys + 1] = { vt, kt }
+			else -- only set vtype if all vtypes are same
+				if not vtyped
+					vtyped = true
+					vtype = vt
+				else if not ty.same(vtype, vt)
+					vtype = nil
+		if vtype
+			tytys[#tytys + 1] = { vtype, nil }
+		var tbl = ty.tbl(tytys)
+		return tbl
+
+	Expr[TExpr.Index] = \node ->
+		var ot = infer_expr(node.obj)
+		var it = infer_expr(node.idx)
+		if is_string_index(node.idx, it)
+			return check_field(ot, node.idx.value, node)
+
+		-- else key index can be any type
+		-- if index is number, it can be float, so we cannot know
+		-- else index is its runtime value, so we cannot know
+		check(ty.tbl({}), ot, node, "indexer ")
+		return new(), ot
+
+	Expr[TExpr.Field] = \node ->
+		var ot = infer_expr(node.obj)
+		return check_field(ot, node.field, node)
+
+	Expr[TExpr.Call] = \node ->
+		var arg1 = node.args[1]
+		-- check imports
+		if arg1 and arg1.tag == TExpr.String and node.func.tag == TExpr.Id and node.func.name == 'require'
+				return import(arg1.value) or new()
+
+		var atypes
+		var func = node.func
+		var ftype, fobj = infer_expr(func)
+		if arg1 and arg1.name == '@' and not func.bracketed
+			if func.tag == TExpr.Field or func.tag == TExpr.Index
+				atypes = infer_exprs(node.args, 2)
+				table.insert(atypes, 1, fobj)
+
+		if not atypes
+			atypes = infer_exprs(node.args)
+		return check_fn(ftype, atypes, node, callable_name(func))
+
+	Expr[TExpr.Unary] = \node ->
+		var rtype = infer_expr(node.right)
+		var op = node.op
+		if op == '#'
+			check_op(ty.or({ty.tbl({}), ty.str()}), rtype, node, op, node.right)
+			return ty.num()
+		if op == '-'
+			check_op(ty.num(), rtype, node, op, node.right)
+			return ty.num()
+		-- op == 'not'
+		return ty.bool()
+
+	Expr[TExpr.Binary] = \node ->
+		var op = node.op
+
+		-- Lua ternary idiom: `(a and b) or c`
+		-- Type it as `b_type | c_type`, discarding a's type from the result,
+		-- since b is always the truthy branch and a is just the condition.
+		if op == 'or' and node.left.tag == TExpr.Binary and node.left.op == 'and'
+			infer_expr(node.left.left)             -- infer `a` for side-effects/constraints
+			var btype = infer_expr(node.left.right) -- `b` (truthy branch)
+			var ctype = infer_expr(node.right)      -- `c` (fallback branch)
+			return ty.or({btype, ctype})
+
+		var ltype = infer_expr(node.left)
+		var rtype = infer_expr(node.right)
+
+		if op == 'and'
+			-- x and y: returns x if falsy, else y; union is a safe over-approximation
+			return ty.or({ltype, rtype})
+
+		if arithmetic(op) or relational(op)
+			-- skip equal and not equal, coz they can compare anything
+			if op ~= '==' and op ~= '~='
+				if arithmetic(op)
+					check_op(ty.num(), ltype, node, op, node.left, "left")
+					check_op(ty.num(), rtype, node, op, node.right, "right")
+				else
+					var ordered = ty.or({ty.num(), ty.str()})
+					check_op(ordered, ltype, node, op, node.left, "left")
+					check_op(ordered, rtype, node, op, node.right, "right")
+			if relational(op)
+				return ty.bool()
+		else if op == '..'
+			var strnum = ty.or({ty.num(), ty.str()})
+			-- symmetric check
+			check_op(strnum, rtype, node, op, node.right, "right")
+			check_op(strnum, ltype, node, op, node.left, "left")
+			return ty.str()
+		-- op == 'or'
+		return ty.or({ltype, rtype})
+
+	--------- Statements --------------------
+	Stmt[TStmt.Expr] = \node ->
+		infer_expr(node.expr)
+
+	Stmt[TStmt.Local] = \node ->
+		balance_check(node.vars, node.exprs)
+		var rtypes = with_lvl(1, infer_exprs, node.exprs)
+		for i, var in ipairs(node.vars)
+			var rt = rtypes[i] or ty.nil()
+			-- generalize function types so their param type-vars don't leak upper-bound
+			-- constraints across call sites at the same level (SimpleSub let-generalization)
+			if solv.apply(rt).tag == TType.Func
+				rt = solv.simplify(rt)
+			declare(var, solv.extend(new(), rt))
+
+	-- let: pre-declare name before inferring RHS so recursive references resolve
+	Stmt[TStmt.Let] = \node ->
+		balance_check(node.vars, node.exprs)
+		-- pre-declare all names before inferring RHS so lambdas can self/mutually reference
+		var placeholders = {}
+		for i, lvar in ipairs(node.vars)
+			var ph = new()
+			placeholders[i] = ph
+			declare(lvar, ph)
+		var rtypes = with_lvl(1, infer_exprs, node.exprs)
+		for i, lvar in ipairs(node.vars)
+			var rtype = rtypes[i] or ty.nil()
+			solv.extend(placeholders[i], rtype)
+			scope.set_const(maybe_self(lvar.name))
+
+
+	var assign_field = \node, otype, field, rtype ->
+		var tytys = {
+			{ rtype, field }
+		}
+		var ok = solv.constrain(ty.tbl(tytys), otype)
+		if not ok
+			var t = solv.apply(otype)
+			var tbl = ty.get_tbl(t)
+			if tbl
+				for _, tk in ipairs(tbl)
+					if tk[2] == field
+						-- reassignment of different type to same field
+						tk[1] = ty.or({tk[1], rtype})
+						if otype.tag == TType.New
+							solv.extend(otype, t)
+						return
+
+				-- try to add a new field
+				-- clone in case it is a parameter so that for f: t1 -> t2,  t2 is different from t1
+				var param = node.obj.name
+				if param
+					param = maybe_self(param)
+					t = ty.clone(t)
+					tbl = ty.get_tbl(t)
+					tbl[#tbl + 1] = tytys[1]
+					if not scope.update_var(param, solv.extend(new(), t))
+						warn(node.line, node.col, 1, "Add field `" .. field .. "` to undeclared table `" .. param .. "`")
+				-- else need to find the tvar to extend, which we cant bcoz we are next next level down
+
+
+	Stmt[TStmt.Assign] = \node ->
+		balance_check(node.lefts, node.rights)
+		var rtypes = infer_exprs(node.rights)
+		for i, n in ipairs(node.lefts)
+			var rtype = rtypes[i] or ty.nil()
+			var ltype
+			if n.tag == TExpr.Id
+				if scope.is_const(maybe_self(n.name))
+					warn(n.line, n.col, 2, "cannot reassign `let`-bound const `" .. n.name .. "`")
+				ltype = declared_type(n) or infer_expr(n)
+				-- warn if reassignment of different type
+				-- check(ltype, rtype, n, "assigment ")
+				if not solv.constrain(rtype, ltype)
+					if ltype.tag == TType.New
+						solv.extend(ltype, ty.or({solv.apply(ltype), rtype}))
+			else
+				var ot = infer_expr(n.obj)
+				if check(ty.tbl({}), ot, n, assign_msg(n))
+					if n.tag == TExpr.Index
+						var it = infer_expr(n.idx)
+						if is_string_index(n.idx, it)
+							assign_field(n, ot, n.idx.value, rtype)
+					else
+						assign_field(n, ot, n.field, rtype)
+
+
+	Stmt[TStmt.Do] = \node ->
+		check_block(node.body)
+
+	-- MLstruct: map Lua type() strings to type constructors
+	var typestr_to_ctor = {
+		["number"] = ty.num,
+		["string"] = ty.str,
+		["boolean"] = ty.bool,
+		["nil"] = ty.nil,
+		["table"] = \-> return ty.tbl({})
+	}
+
+	-- MLstruct: detect type(x) == "typename" guard, return varname and narrowed type
+	var type_guard = \test ->
+		if test.tag ~= TExpr.Binary or test.op ~= '=='
+			return nil
+		var call, strnode = test.left, test.right
+		-- handle both type(x)=="t" and "t"==type(x)
+		if call.tag == TExpr.String and strnode.tag == TExpr.Call
+			call, strnode = strnode, call
+		if call.tag ~= TExpr.Call or strnode.tag ~= TExpr.String
+			return nil
+		if call.func.tag ~= TExpr.Id or call.func.name ~= 'type'
+			return nil
+		if not (call.args[1] and call.args[1].tag == TExpr.Id)
+			return nil
+		var ctor = typestr_to_ctor[strnode.value]
+		if not ctor
+			return nil
+		return call.args[1].name, ctor()
+
+	-- detect `x` or `not x` where x is an Id: returns name and whether it is negated
+	var nil_guard = \test ->
+		if test.tag == TExpr.Id
+			return test.name, false
+		if test.tag == TExpr.Unary and test.op == 'not' and test.right.tag == TExpr.Id
+			return test.right.name, true
+		return nil
+
+	Stmt[TStmt.If] = \node ->
+		for i = 1, #node.tests
+			var test = node.tests[i]
+			infer_expr(test)
+			-- MLstruct: flow-sensitive narrowing in then-branch
+			var gname, gtype = type_guard(test)
+			if gname
+				var __, orig = scope.declared(gname)
+				var narrowed = gtype
+				if orig
+					narrowed = ty.and({orig, gtype})
+				scope.update_var(gname, narrowed)
+				check_block(node.thenss[i])
+				scope.update_var(gname, orig)
+			else
+				-- nil_guard: `if x` narrows x to ~nil in then-branch
+				var nname, negated = nil_guard(test)
+				if nname and not negated
+					var __, orig = scope.declared(nname)
+					if orig
+						scope.update_var(nname, ty.and({orig, ty.neg(ty.nil())}))
+					check_block(node.thenss[i])
+					scope.update_var(nname, orig)
+				else
+					check_block(node.thenss[i])
+		if node.elses
+			-- MLstruct: narrow each guarded variable to the intersection of negations of all guards
+			-- e.g. if type(x)=="num" ... else if type(x)=="str" ... else -> x: ~num & ~str
+			var neg_map = {}
+			var neg_keys = {}
+			for i = 1, #node.tests
+				var gname, gtype = type_guard(node.tests[i])
+				if gname
+					if not neg_map[gname]
+						var __, orig = scope.declared(gname)
+						neg_map[gname] = { orig = orig, neg = ty.neg(gtype) }
+						neg_keys[#neg_keys + 1] = gname
+					else
+						-- intersect: ~A & ~B for same variable
+						neg_map[gname].neg = ty.and({neg_map[gname].neg, ty.neg(gtype)})
+				else
+					-- nil_guard: `if x` or `if not x` both narrow the else-branch to ~nil
+					var nname = nil_guard(node.tests[i])
+					if nname and not neg_map[nname]
+						var __, orig = scope.declared(nname)
+						neg_map[nname] = { orig = orig, neg = ty.neg(ty.nil()) }
+						neg_keys[#neg_keys + 1] = nname
+			if #neg_keys > 0
+				for _, gname in ipairs(neg_keys)
+					var e = neg_map[gname]
+					scope.update_var(gname, e.orig and ty.and({e.orig, e.neg}) or e.neg)
+				check_block(node.elses)
+				for _, gname in ipairs(neg_keys)
+					scope.update_var(gname, neg_map[gname].orig)
+			else
+				check_block(node.elses)
+
+	Stmt[TStmt.Forin] = \node ->
+		scope.enter_forin()
+		infer_exprs(node.exprs)
+		-- declare var into scope after rhs
+		for _, var in ipairs(node.vars)
+			declare(var, new())
+		check_block(node.body)
+		scope.leave()
+
+	Stmt[TStmt.Fornum] = \node ->
+		scope.enter_fornum()
+		var msg = " expression in numeric for "
+		check(ty.num(), infer_expr(node.first), node, "first " .. msg)
+		check(ty.num(), infer_expr(node.last), node, "second " .. msg)
+		if node.step
+			check(ty.num(), infer_expr(node.step), node, "third " .. msg)
+		-- declare var into scope after rhs
+		declare(node.var, ty.num())
+		check_block(node.body)
+		scope.leave()
+
+	Stmt[TStmt.While] = \node ->
+		scope.enter_while()
+		infer_expr(node.test)
+		check_block(node.body)
+		scope.leave()
+
+	Stmt[TStmt.Repeat] = \node ->
+		scope.enter_repeat()
+		scope.enter()
+		check_stmts(node.body)
+		infer_expr(node.test)
+		-- test expr in scope after `until`
+		scope.leave()
+		scope.leave()
+
+	Stmt[TStmt.Return] = \node ->
+		var now = ty.tuple(infer_exprs(node.exprs))
+		var prev = scope.get_returns()
+		if prev
+			now = ty.or({prev, now})
+		scope.set_returns(now)
+
+	Stmt[TStmt.Break] = \node ->
+		scope.new_break(node.line, node.col)
+
+	Stmt[TStmt.Goto] = \node ->
+		scope.new_goto(node.name, node.line, node.col)
+
+	Stmt[TStmt.Label] = \node ->
+		scope.new_label(node.name, node.line, node.col)
+
+
+	-- main chunk is always a vararg function
+	scope.begin_func()
+	scope.varargs()
+	check_block(stmts)
+	var rtuple = scope.get_returns()
+	scope.end_func()
+	-- lua require() can only return single value
+	if rtuple and rtuple[1]
+		return solv.simplify(rtuple[1])
+	return ty.nil()
+
+

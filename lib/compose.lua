@@ -1,5 +1,5 @@
 --
--- Generated from compose.lt
+-- Generated from compose.lau
 --
 
 return function(...)

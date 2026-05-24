@@ -1,0 +1,158 @@
+let ast = require('lau.ast')
+let Tag = require('lau.tag')
+let TStmt = Tag.Stmt
+let TExpr = Tag.Expr
+
+let id = ast.Expr.id
+
+return \stmts ->
+
+	var Stmt = {}
+	var Expr = {}
+
+	var visit_stmts = \nodes ->
+		var list = {}
+		for i, node in ipairs(nodes)
+			var rule = Stmt[node.tag]
+			list[i] = rule and rule(node) or node
+		return list
+
+	var visit_expr = \node ->
+		var rule = Expr[node.tag]
+		return rule and rule(node) or node
+
+	var visit_exprs = \nodes ->
+		var list = {}
+		for i, node in ipairs(nodes)
+			list[i] = visit_expr(node)
+		return list
+
+
+
+	--------- Expressions --------------------
+	Expr[TExpr.Id] = \node ->
+		if node.name == '@'
+			node.name = 'self'
+		return node
+
+	Expr[TExpr.Function] = \node ->
+		node.params = visit_exprs(node.params)
+		node.body = visit_stmts(node.body)
+		return node
+
+	Expr[TExpr.Table] = \node ->
+		var valkeys = {}
+		for i, kv in ipairs(node.valkeys)
+			valkeys[i] = {}
+			valkeys[i][1] = visit_expr(kv[1])
+			if kv[2]
+				valkeys[i][2] = visit_expr(kv[2])
+		node.valkeys = valkeys
+		return node
+
+	Expr[TExpr.Index] = \node ->
+		node.obj = visit_expr(node.obj)
+		node.idx = visit_expr(node.idx)
+		return node
+
+	Expr[TExpr.Field] = \node ->
+		node.obj = visit_expr(node.obj)
+		return node
+
+	Expr[TExpr.Call] = \node ->
+		node.func = visit_expr(node.func)
+		var arg1 = node.args[1]
+		if arg1 and arg1.name == '@'
+			var func = node.func
+			if not func.bracketed
+				if func.tag == TExpr.Field
+					table.remove(node.args, 1)
+					node.args = visit_exprs(node.args)
+					return ast.Expr.invoke(func.obj, func.field, node.args, node)
+
+				if func.tag == TExpr.Index
+					-- simulate a wrapped self method call
+					var obj = id('_self_', node)  -- lets hope we dont shadow parent scope variable
+					node.args[1] = obj
+					node.args = visit_exprs(node.args)
+					var body = {
+						ast.Stmt.local({obj}, {func.obj}, node)
+						, ast.Stmt.return({
+							ast.Expr.call(ast.Expr.index(obj, func.idx, node), node.args, node)
+						}, node)
+					}
+					var lambda = ast.Expr.function({}, body, node)
+					return ast.Expr.call(lambda, {}, node)
+
+		node.args = visit_exprs(node.args)
+		return node
+
+	Expr[TExpr.Unary] = \node ->
+		node.right = visit_expr(node.right)
+		return node
+
+	Expr[TExpr.Binary] = \node ->
+		node.left = visit_expr(node.left)
+		node.right = visit_expr(node.right)
+		return node
+
+	--------- Statements --------------------
+	Stmt[TStmt.Expr] = \node ->
+		node.expr = visit_expr(node.expr)
+		return node
+
+	Stmt[TStmt.Local] = \node ->
+		node.vars = visit_exprs(node.vars)
+		node.exprs = visit_exprs(node.exprs)
+		return node
+
+	Stmt[TStmt.Let] = \node ->
+		node.vars = visit_exprs(node.vars)
+		node.exprs = visit_exprs(node.exprs)
+		return node
+
+	Stmt[TStmt.Assign] = \node ->
+		node.lefts = visit_exprs(node.lefts)
+		node.rights = visit_exprs(node.rights)
+		return node
+
+	Stmt[TStmt.Do] = \node ->
+		node.body = visit_stmts(node.body)
+		return node
+
+	Stmt[TStmt.If] = \node ->
+		for i = 1, #node.tests
+			node.tests[i] = visit_expr(node.tests[i])
+			node.thenss[i] = visit_stmts(node.thenss[i])
+		if node.elses
+			node.elses = visit_stmts(node.elses)
+		return node
+
+	Stmt[TStmt.Forin] = \node ->
+		node.exprs = visit_exprs(node.exprs)
+		node.body = visit_stmts(node.body)
+		return node
+
+	Stmt[TStmt.Fornum] = \node ->
+		node.first = visit_expr(node.first)
+		node.last = visit_expr(node.last)
+		if node.step
+			node.step = visit_expr(node.step)
+		node.body = visit_stmts(node.body)
+		return node
+
+	Stmt[TStmt.While] = \node ->
+		node.test = visit_expr(node.test)
+		node.body = visit_stmts(node.body)
+		return node
+
+	Stmt[TStmt.Repeat] = \node ->
+		node.body = visit_stmts(node.body)
+		node.test = visit_expr(node.test)
+		return node
+
+	Stmt[TStmt.Return] = \node ->
+		node.exprs = visit_exprs(node.exprs)
+		return node
+
+	return visit_stmts(stmts)

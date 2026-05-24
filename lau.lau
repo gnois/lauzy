@@ -1,0 +1,179 @@
+var source = debug.getinfo(1, 'S').source
+var script = source
+if string.sub(source, 1, 1) == '@'
+	script = string.sub(source, 2)
+else if arg and arg[0]
+	script = arg[0]
+script = string.gsub(script, '\\', '/')
+var root = string.match(script, '^(.*)/[^/]*$') or '.'
+if not string.find(package.path, root .. '/?.lua;', 1, true)
+	package.path = root .. '/?.lua;' .. package.path
+
+var term = require('term')
+var compiler = require('lau.compile')
+var color = term.color
+var write = term.write
+
+var usage = \err ->
+	term.usage(err or "", "\n", ``
+Usage:
+  luajit lau.lua [-f] [-t] [-d xvar] path/src [dst]
+
+    if src does not end with .lau, .lau is appended
+
+    if dst is omitted, path/src.lau will be run
+    else if dst ends with .lua, path/src.lau will be transpiled to dst
+    else dst is assumed to be a folder, path/src.lau will be transpiled to dst/path/src.lua, and its dependencies to dst/path/*.lua
+
+    -f        Force overwrite if output file already exists. Ignored if dst is omitted.
+    -t        Enable type checking
+    -d xvar   Declares `xvar` to silent undeclared identifier warning
+
+  Running without parameters enters Read-Generate-Eval-Print loop
+``)
+
+
+
+-- whether to overwrite dst
+var force = false
+-- whether to typecheck, works even in repl
+var typecheck = false
+-- whether to compile dependencies
+var single = false
+
+var paths = {}
+var decls = {}
+
+for s, p in term.scan({...})
+	if s == 'f'
+		if s == 'f'
+			force = true
+		if p
+			table.insert(paths, p)
+	else if s == 'd'
+		if p
+			decls[p] = true
+		else
+			usage("Error: -d requires identifier")
+	else
+		if s == 't'
+			typecheck = true
+		else if s ~= ""
+			usage("Error: unknown switch -" .. s)
+		if p
+			table.insert(paths, p)
+
+
+var src, dst
+if #paths > 2
+	usage("Error: only one file with an optional output accepted")
+else
+	src = paths[1]
+	dst = paths[2]
+	if src
+		src = term.localize(src)
+		-- in case is a Windows drive letter
+		if string.sub(src, 2, 2) == ':'
+			src = string.sub(src, 3)
+
+	if dst
+		dst = term.localize(dst)
+		if string.sub(dst, -string.len(".lua")) == ".lua"
+			single = true
+		else -- remove slashes at the end
+			dst = string.gsub(dst, term.slash .. "*$", "")
+
+
+var compile = compiler({declares = decls, typecheck = typecheck, single = single}, color)
+
+if src
+	var _, code, warns, imports = compile.file(src)
+
+	if not dst -- run
+		if force
+			write(color.red, "-f is ignored", color.reset, "\n")
+		if warns
+			write(warns, "\n")
+		if code
+			var fn = assert(loadstring(code))
+			fn()
+			write("\n")
+
+	else  -- transpile
+		var created = {}  -- folders created
+		var existed = {}  -- folders already exist
+		var skips = {}  -- files not overwritten or failed to compile
+		-- sort import keys so transpilation order is deterministic across runs
+		var import_keys = {}
+		for k in pairs(imports)
+			table.insert(import_keys, k)
+		table.sort(import_keys)
+		for __, k in ipairs(import_keys)
+			var file = imports[k]
+			-- construct output file path
+			var dest = dst
+			if not single
+				dest = string.gsub(file.path, "%.lau", ".lua")
+				dest = dst .. term.slash .. string.gsub(dest, "^".. term.slash .. "*", "") -- remove slashes in front of dest
+
+			-- dest is now dir/sub/file.lua
+			if file.warns or file.code
+				write(dest, ":")
+				if file.warns
+					write("\n", file.warns, "\n")
+				else if file.code
+					write("\n Ok\n")
+			-- else
+			-- 	source file not found
+
+			if file.code
+				-- split into dir/sub and file.lua
+				var name = dest
+				var dir
+				string.gsub(dest, "(.*[/\\])(.*)", \d, n ->
+					dir = d
+					name = n
+				)
+				-- no need to test against overwrite if dir was just created
+				if not force and not created[dir or ""]
+					var f = io.open(dest, 'r')
+					if f
+						skips[dest] = 1
+						f.close(@)
+
+				if not skips[dest]
+					-- create directory if needed
+					if dir and not created[dir] and not existed[dir]
+						if term.exist_dir(dir)
+							existed[dir] = true
+						else
+							var x, err = term.mkdir(dir)
+							if not x
+								error(err)
+							created[dir] = true
+
+					var f, err = io.open(dest, 'wb')
+					if not f
+						error(err)
+
+					var srcname = string.gsub(file.path, "(.*[/\\])(.*)", "%2")
+					f.write(@, "--\n-- Generated from ", srcname, "\n--")
+					f.write(@, file.code)
+					f.close(@)
+			else
+				skips[dest] = -1
+
+		-- list files not generated
+		var fails, f = {}, 1
+		for k, v in pairs(skips)
+			if v == 1
+				fails[f] = k .. " already exists. Use -f to overwrite"
+			else
+				fails[f] = "Fail to generate " .. k
+			f = f + 1
+
+		if f > 1 -- dont show extra \n if no fails
+			write(color.red, table.concat(fails, "\n"), color.reset, "\n")
+
+else
+	term.repl(compile)
