@@ -135,6 +135,36 @@ local keep_varargs = function(src, dst)
     end
     return dst
 end
+local concrete_disjoint; concrete_disjoint = function(a, b)
+    if a.tag == TType.Nil then
+        return b.tag == TType.Val or b.tag == TType.Func or b.tag == TType.Tbl or b.tag == TType.Tuple
+    end
+    if b.tag == TType.Nil then
+        return a.tag == TType.Val or a.tag == TType.Func or a.tag == TType.Tbl or a.tag == TType.Tuple
+    end
+    if a.tag == TType.Val and b.tag == TType.Val then
+        return a.type ~= b.type
+    end
+    if a.tag == TType.Val then
+        return b.tag == TType.Func or b.tag == TType.Tbl or b.tag == TType.Tuple
+    end
+    if b.tag == TType.Val then
+        return a.tag == TType.Func or a.tag == TType.Tbl or a.tag == TType.Tuple
+    end
+    if a.tag == TType.Func then
+        return b.tag == TType.Tbl or b.tag == TType.Tuple
+    end
+    if a.tag == TType.Tbl then
+        return b.tag == TType.Func or b.tag == TType.Tuple
+    end
+    if a.tag == TType.Tuple then
+        return b.tag == TType.Func or b.tag == TType.Tbl
+    end
+    if b.tag == TType.Tuple then
+        return a.tag == TType.Func or a.tag == TType.Tbl
+    end
+    return false
+end
 local compound_type; compound_type = function(tag, parts)
     local absorber = tag == TType.Or and TType.Top or TType.Bot
     local identity = tag == TType.Or and TType.Bot or TType.Top
@@ -150,10 +180,50 @@ local compound_type; compound_type = function(tag, parts)
                 end
             end
         end
-        if a.tag ~= identity then
+        local skip = false
+        if tag == TType.And and a.tag == TType.Neg then
+            local neg_inner = a[1]
+            local has_concrete = false
+            local all_disjoint = true
+            for __, b in ipairs(parts) do
+                if b ~= a and b.tag ~= TType.Neg and b.tag ~= TType.Top and b.tag ~= TType.Bot then
+                    has_concrete = true
+                    if not concrete_disjoint(b, neg_inner) then
+                        all_disjoint = false
+                        break
+                    end
+                end
+            end
+            if has_concrete and all_disjoint then
+                skip = true
+            end
+        end
+        if not skip and a.tag ~= identity then
             filtered[#filtered + 1] = a
         end
     end
+    local sub_tag = tag == TType.Or and TType.And or TType.Or
+    local absorbed = {}
+    for i, a in ipairs(filtered) do
+        local drop = false
+        if a.tag == sub_tag then
+            for _, part in ipairs(a) do
+                for j, b in ipairs(filtered) do
+                    if j ~= i and (part == b or same(part, b)) then
+                        drop = true
+                        break
+                    end
+                end
+                if drop then
+                    break
+                end
+            end
+        end
+        if not drop then
+            absorbed[#absorbed + 1] = a
+        end
+    end
+    filtered = absorbed
     if #filtered == 1 then
         return filtered[1]
     end
@@ -228,6 +298,27 @@ local simplify; simplify = function(node, seen)
             end
         end
         flat = dedup(flat)
+        if node.tag == TType.And then
+            for i, v in ipairs(flat) do
+                if v.tag == TType.Or then
+                    local rest = {}
+                    for j, w in ipairs(flat) do
+                        if j ~= i then
+                            rest[#rest + 1] = w
+                        end
+                    end
+                    local branches = {}
+                    for _, branch in ipairs(v) do
+                        local parts = {branch}
+                        for __, w in ipairs(rest) do
+                            parts[#parts + 1] = w
+                        end
+                        branches[#branches + 1] = simplify(compound_type(TType.And, parts), {})
+                    end
+                    return keep_varargs(node, compound_type(TType.Or, branches))
+                end
+            end
+        end
         return keep_varargs(node, compound_type(node.tag, flat))
     end
     if node.tag == TType.Tuple then
@@ -252,7 +343,43 @@ local simplify; simplify = function(node, seen)
         return keep_varargs(node, Type.tbl(out))
     end
     if node.tag == TType.Neg then
-        return keep_varargs(node, Type.neg(simplify(node[1], seen)))
+        local inner = simplify(node[1], seen)
+        if inner.tag == TType.Neg then
+            return keep_varargs(node, inner[1])
+        end
+        if inner.tag == TType.Or then
+            local all_concrete = true
+            for _, v in ipairs(inner) do
+                if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot then
+                    all_concrete = false
+                    break
+                end
+            end
+            if all_concrete then
+                local parts = {}
+                for _, v in ipairs(inner) do
+                    parts[#parts + 1] = simplify(Type.neg(v), {})
+                end
+                return keep_varargs(node, compound_type(TType.And, flatten(TType.And, parts)))
+            end
+        end
+        if inner.tag == TType.And then
+            local all_concrete = true
+            for _, v in ipairs(inner) do
+                if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot then
+                    all_concrete = false
+                    break
+                end
+            end
+            if all_concrete then
+                local parts = {}
+                for _, v in ipairs(inner) do
+                    parts[#parts + 1] = simplify(Type.neg(v), {})
+                end
+                return keep_varargs(node, compound_type(TType.Or, flatten(TType.Or, parts)))
+            end
+        end
+        return keep_varargs(node, Type.neg(inner))
     end
     if node.tag == TType.Top or node.tag == TType.Bot then
         return node

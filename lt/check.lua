@@ -265,21 +265,57 @@ return function(scope, stmts, warn, import, typecheck)
         fail(node, "expression")
         return new()
     end
+    local or_tuple_elem; or_tuple_elem = function(nt, i)
+        if nt.tag == TType.Or then
+            local elems = {}
+            for _, branch in ipairs(nt) do
+                if branch.tag == TType.Tuple then
+                    elems[#elems + 1] = branch[i] or ty["nil"]()
+                else
+                    elems[#elems + 1] = i == 1 and branch or ty["nil"]()
+                end
+            end
+            if #elems == 0 then
+                return nil
+            end
+            if #elems == 1 then
+                return elems[1]
+            end
+            return ty["or"](elems)
+        end
+        return nt[i]
+    end
+    local or_tuple_len; or_tuple_len = function(nt)
+        if nt.tag == TType.Or then
+            local n = 0
+            for _, branch in ipairs(nt) do
+                if branch.tag == TType.Tuple then
+                    n = math.max(n, #branch)
+                else
+                    n = math.max(n, 1)
+                end
+            end
+            return n
+        end
+        return #nt
+    end
     local infer_exprs = function(nodes, start)
         local types, t = {}, 0
         local last = #nodes
         local first = start or 1
         for i = first, last, 1 do
             local nt = infer_expr(nodes[i])
-            if nt.tag == TType.Tuple then
+            if nt.tag == TType.Tuple or nt.tag == TType.Or then
                 if i == last then
-                    for __, v in ipairs(nt) do
+                    local n = or_tuple_len(nt)
+                    for j = 1, n do
+                        local elem = or_tuple_elem(nt, j) or ty["nil"]()
                         t = t + 1
-                        types[t] = v
+                        types[t] = elem
                     end
                 else
                     t = t + 1
-                    types[t] = nt[1] or ty["nil"]()
+                    types[t] = or_tuple_elem(nt, 1) or ty["nil"]()
                 end
             else
                 t = t + 1

@@ -131,6 +131,20 @@ return ->
 					out = ty.or({out, c})
 				else
 					out = ty.and({out, c})
+			-- At positive polarity, intersect with the meet of upper bounds so that
+			-- e.g. a var with sub=[nil, str] and sup=[~nil] produces (nil|str)&~nil
+			-- which simplify() can then reduce to str.
+			-- Skip for co-occurring vars since they are kept as named type variables.
+			if pol and #node.sup > 0 and not (co_vars and co_vars[node.id])
+				var sup_out = nil
+				for _, b in ipairs(node.sup)
+					var c = coalesce(b, false, seen, co_vars)
+					if sup_out == nil
+						sup_out = c
+					else
+						sup_out = ty.and({sup_out, c})
+				if sup_out and sup_out.tag ~= TType.Top
+					out = ty.and({out or ty.bot(), sup_out})
 			seen[mark] = nil
 			var result = out or (pol and ty.bot() or ty.top())
 			-- preserve varargs flag: a varargs param var coalescing to Top must stay Top*
@@ -701,6 +715,11 @@ return ->
 			return false, last_err
 
 		if lhs.tag == TType.And
+			-- First, try simplifying the intersection: e.g. (nil|str)&~nil simplifies to str.
+			-- This allows constraints like ((nil|str)&~nil) <: str|num to succeed.
+			var slhs = simplify(lhs)
+			if slhs.tag ~= TType.And
+				return constrain(slhs, rhs, cache)
 			var last_err = "cannot constrain intersection"
 			for _, t in ipairs(lhs)
 				var ok, err = constrain(t, rhs, cache)
