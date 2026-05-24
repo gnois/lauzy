@@ -1,5 +1,5 @@
-local lex = require("lt.lex")
-local reader = require("lt.read")
+local lex = require("lau.lex")
+local reader = require("lau.read")
 
 local filename = assert(..., "usage: luajit run-lex.lua <filename>")
 

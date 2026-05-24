@@ -1,5 +1,5 @@
 --
--- Generated from term.lt
+-- Generated from term.lau
 --
 local slash = package.config:sub(1, 1)
 local color = {
@@ -53,7 +53,7 @@ local localize = function(path)
     return string.gsub(path, "\\", slash)
 end
 local exec = function(cmd)
-    local ok, exit_or_signal, code = os.execute(cmd)
+    local ok, _, code = os.execute(cmd)
     if code then
         return code
     end

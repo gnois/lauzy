@@ -1,4 +1,4 @@
-### Rough guide on how to convert a Lua source file to Luaty source using a text editor with Find and Replace.
+### Rough guide on how to convert a Lua source file to lauzy source using a text editor with Find and Replace.
 
 * `local` becomes `var`
 
@@ -95,7 +95,7 @@ Finally, try to compile and fix compilation errors.
 
 
 
-### To create Luaty command on Windows, use:
+### To create lauzy command on Windows, use:
 ```
-doskey luaty=luajit -e "package.path=package.path .. 'path-to-luaty\\?.lua'"  path-to-luaty\lt.lua $*
+doskey lauzy=luajit -e "package.path=package.path .. 'path-to-lauzy\\?.lua'"  path-to-lauzy\lau.lua $*
 ```

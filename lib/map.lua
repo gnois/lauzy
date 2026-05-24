@@ -1,5 +1,5 @@
 --
--- Generated from map.lt
+-- Generated from map.lau
 --
 
 local curry = require("lib.curry")

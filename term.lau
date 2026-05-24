@@ -1,0 +1,215 @@
+-- determine forward or back slash
+var slash = package.config.sub(@, 1, 1)
+
+-- ansi colors
+var color = {
+	reset     = "\27[0m"
+	, red     = "\27[91;1m"
+	, green   = "\27[92;1m"
+	, yellow  = "\27[93;1m"
+	, blue    = "\27[94;1m"
+	, magenta = "\27[95;1m"
+	, cyan    = "\27[96;1m"
+	, white   = "\27[97;1m"
+}
+
+
+-- we dont want ending newline in print()
+-- but io.write() doesn't implicitly call tostring()
+var write = \... ->
+	var n = select("#", ...)
+	for i = 1, n, 1
+		io.stdout.write(@, tostring(select(i, ...)))
+		-- separate each item with tab
+		--if i ~= n
+		--	io.stdout.write(@, "\t")
+
+
+-- show usage and exit
+var usage = \... ->
+	write(...)
+	os.exit(1)
+
+
+-- parses command line
+-- yields switch and its matching parameter if any
+var scan = \args ->
+	-- const
+	var yield = coroutine.yield
+	var null = ""
+
+	return coroutine.wrap(->
+		var switch = null
+		var k = 1
+		while args[k]
+			var a = args[k]
+			if "-" == string.sub(a, 1, 1)
+				-- previous loop had a switch
+				if switch ~= null
+					yield(switch)
+				switch = string.sub(a, 2)
+			else
+				yield(switch, a)
+				switch = null
+			k = k + 1
+
+		if switch ~= null
+			yield(switch)
+
+	)
+
+
+var localize = \path ->
+	if slash == '\\'
+		return string.gsub(path, '/', slash)
+	return string.gsub(path, '\\', slash)
+
+
+--``
+https://github.com/keplerproject/lua-compat-5.3/wiki/os.execute
+
+os.execute in Lua 5.2 and 5.3 returns three values: a boolean indicating sucessful/unsuccessful execution, a string ("exit" or "signal"), and the actual exit status or signal number.
+But in 5.1 only 1 one value returned
+--``
+var exec = \cmd ->
+	--write(cmd)
+	var ok, _, code = os.execute(cmd)
+	if code
+		return code
+	-- Lua 5.1, ok is code
+	return ok
+
+
+var mkdir = \path ->
+	var cmd
+	if slash == '\\'
+		cmd = "md " .. path
+	else
+		cmd = "mkdir -p " .. path
+	var code = exec(cmd)
+	-- success is always 0, see man page for command
+	if code == 0
+		return true
+	return false, cmd .. " failed, exit code: " .. tostring(code)
+
+
+var exist_file = \path ->
+	var f = io.open(path, "r")
+	if f
+		io.close(f)
+		return true
+	return false
+
+
+-- pushd and popd exists on linux, unix and DOS
+var exist_dir = \path ->
+	var p = string.gsub(path, slash .. "*$", "")
+	-- if Path Not Found, dont show on stderr
+	var code = exec("pushd " .. p .. " 2> nul")
+	if code == 0
+		exec("popd")
+	return code == 0
+
+
+--var f = list_files("\\path")
+--for line in f.lines(@)
+--   print(line)
+var list_files = \path ->
+	var cmd
+	if slash == '\\'
+		cmd = 'dir /b/a:-D "' .. path .. '"'
+	else
+		cmd = '/bin/ls -p "' .. path .. '" | grep -v /'
+	return io.popen(cmd)
+
+
+var repl = \compile ->
+	-- https://stackoverflow.com/questions/20410082/why-does-the-lua-repl-require-you-to-prep-an-equal-sign-in-order-to-get-a-val
+	var show_results = \... ->
+		-- This function takes care of nils at the end of results and such
+		if select('#', ...) > 1
+			write(select(2, ...))
+
+
+	write(`-- empty line to transpile, \q to quit --`, '\n')
+	var list = {}
+	do
+		write('> ')
+		io.stdout.flush(@)
+		var s = io.stdin.read(@)
+		if s == `\q`
+			break
+		else if s and #s > 0
+			list[#list + 1] = s
+		else
+			var str = table.concat(list, "\n")
+			list = {}
+			var _, code, warns = compile.string(str)
+			if warns
+				write(warns)
+			if code
+				write(color.cyan, code, color.reset)
+				var fn, err = loadstring(code)
+				if err -- Maybe it's an expression
+					-- This is a bad hack, but it might work
+					fn = load('return (' .. fn .. ')', 'stdin')
+
+				if fn
+					show_results(pcall(fn))
+				else
+					write(err)
+			write("\n")
+	until false
+
+
+
+
+-- Window to support ANSI color, may not work on all Windows version
+if slash == '\\'
+	var bit = require("bit")
+	var ffi = require("ffi")
+	var kernel32 = ffi.load("kernel32")
+
+	ffi.cdef(``
+		typedef long BOOL;
+		typedef void* HANDLE;
+		typedef uint32_t DWORD;
+		typedef DWORD* LPDWORD;
+		static const int STD_OUTPUT_HANDLE                  = ((DWORD)-11);
+		static const int ENABLE_VIRTUAL_TERMINAL_PROCESSING = ((DWORD)4);
+		HANDLE GetStdHandle(DWORD nStdHandle);
+		BOOL GetConsoleMode(HANDLE hConsoleHandle, LPDWORD lpMode);
+		BOOL SetConsoleMode(HANDLE hConsoleHandle, DWORD dwMode);
+		DWORD GetLastError(void);
+	``)
+
+	var enable_VT = ->
+		var handle = kernel32.GetStdHandle(kernel32.STD_OUTPUT_HANDLE)
+		var lpMode = ffi.new("DWORD[1]")
+		var res = kernel32.GetConsoleMode(handle, lpMode)
+		if res ~= 0
+			var mode = bit.bor(lpMode[0], kernel32.ENABLE_VIRTUAL_TERMINAL_PROCESSING)
+			res = kernel32.SetConsoleMode(handle, mode)
+			if res ~= 0
+				return true
+
+		return false
+
+	if not enable_VT()
+		-- write('No ANSI colors support, error ' .. kernel32.GetLastError())
+		color = setmetatable({}, {__index = -> return ""})
+
+
+return {
+	slash = slash
+	, color = color
+	, write = write
+	, usage = usage
+	, scan = scan
+	, localize = localize
+	, mkdir = mkdir
+	, exist_dir = exist_dir
+	, exist_file = exist_file
+	, list_files = list_files
+	, repl = repl
+}

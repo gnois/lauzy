@@ -1,5 +1,5 @@
 --
--- Generated from curry.lt
+-- Generated from curry.lau
 --
 
 return function(length, fn)

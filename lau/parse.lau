@@ -1,0 +1,648 @@
+-- Grammar spec refer to https://github.com/Microsoft/TypeScript/blob/master/doc/spec.md#38-specifying-types
+
+let ast = require('lau.ast')
+let operator = require('lau.operator')
+let reserved = require('lau.reserved')
+
+let Stmt = ast.Stmt
+let Expr = ast.Expr
+let Keyword = reserved.Keyword
+
+let EndOfBlock = { TK_dedent = true, TK_else = true, TK_until = true, TK_eof = true, ['}'] = true, [')'] = true, [';'] = true, [','] = true }
+let NewLine = { TK_newline = true }
+-- expr kind
+let Kind = { Expr = 'Expr', Var = 'Var', Field = 'Field', Index = 'Index', Call = 'Call' }
+
+
+return \ls, warn ->
+	-- disallow multiple statement on one line
+
+	-----  Error reporting ----------------
+	var parse_error = \severe, em, ... ->
+		var loc = ls.loc()
+		warn(loc.line, loc.col, severe, string.format(em, ...))
+
+	var err_warn = \em ->
+		parse_error(2, "%s", em)
+
+	var err_syntax = \em ->
+		parse_error(3, "%s", em)
+
+	var ls_value = ->
+		if ls.value
+			return "'" .. ls.value .. "'"
+
+	var err_instead = \severe, em, ... ->
+		var msg = string.format(em, ...)
+		parse_error(severe, "%s instead of %s", msg, ls_value() or ls.astext(ls.token))
+
+	var err_expect = \token ->
+		err_instead(3, "%s expected", ls.astext(token))
+
+	var err_symbol = ->
+		var sym = ls.tostr(ls.token)
+		var replace = {end = "<dedent>", local = "`var`", function = "\\...->", elseif = "`else if`", repeat = "`do`"}
+		var rep = replace[sym]
+		if rep
+			parse_error(2, "use %s instead of '%s'", rep, sym)
+		else
+			parse_error(3, "unexpected %s", ls_value() or ls.astext(ls.token))
+
+
+	-------- Helpers ---------------------------
+	var is_keyword = ->
+		var str = ls.tostr(ls.token)
+		if Keyword[str]
+			return str
+
+
+	var lex_opt = \tok ->
+		if ls.token == tok
+			ls.step()
+			return true
+		return false
+
+
+	var lex_check = \tok ->
+		if ls.token ~= tok
+			err_expect(tok)
+		ls.step()
+
+
+	var lex_match = \what, who, line ->
+		if not lex_opt(what)
+			if line == ls.loc().line
+				err_expect(what)
+			else
+				err_instead(3, "%s expected to match %s at line %d", ls.astext(what), ls.astext(who), line)
+			return false
+		return true
+
+
+	var lex_str = ->
+		var loc = ls.loc()
+		var s
+		if ls.token ~= 'TK_name'
+			err_expect('TK_name')
+			-- no longer exiting, so cannot be nil
+			s = ls.tostr(ls.token)
+		else
+			s = ls.value
+		ls.step()
+		return s, loc
+
+
+	-- return true only if a real indent is eaten
+	var lex_indent = ->
+		if NewLine[ls.token] and ls.next() == 'TK_indent'
+			lex_opt('TK_newline')
+			ls.step()
+			return true
+		return false
+
+
+	-- return true only if a real dedent is eaten
+	var lex_dedent = ->
+		if ls.token == 'TK_dedent' or NewLine[ls.token] and ls.next() == 'TK_dedent'
+			lex_opt('TK_newline')
+			ls.step()
+			return true
+		return false
+
+
+	var lex_opt_dent = \dented ->
+		if not dented
+			dented = lex_indent()
+		else
+			dented = not lex_dedent()
+		lex_opt('TK_newline')
+		return dented
+
+
+	var close_dented = \dented, line ->
+		if dented and not lex_dedent()
+			err_instead(3, "%s expected to match %s at line %d", ls.astext('TK_dedent'), ls.astext('TK_indent'), line)
+
+
+	var skip_ends = ->
+		while ls.token == ';' or ls.token == 'TK_end'
+			err_symbol()
+			ls.step()
+		lex_opt('TK_newline')
+
+	--- Type annotation syntax removed ------------------------------------------------
+
+
+	--- Expressions ------------------------------------------------
+	var expr_primary, expr, expr_unop, expr_binop, expr_simple, expr_list, expr_table
+	var parse_body, parse_args, parse_block
+
+	var expr_bracket = ->
+		ls.step() -- skip '['
+		var v = expr()
+		lex_check(']')
+		return v
+
+
+	expr_table = \loc ->
+		var vks, n = {}, 0
+		var dented = false
+		var had_sep = false
+		lex_check('{')
+		while ls.token ~= '}'
+			dented = lex_opt_dent(dented)
+			-- catch common mistake that mess everything later
+			if not dented and ls.token == 'TK_dedent'
+				err_symbol()
+				ls.step()
+
+			-- in case the table ends immediately
+			if ls.token == '}'
+				if had_sep
+					err_warn("trailing `,` in table")
+				break
+			var key
+			if ls.token == '['
+				key = expr_bracket()
+				lex_check('=')
+			else if ls.next() == '='
+				if ls.token == 'TK_name'
+					var name, at = lex_str()
+					key = Expr.string(name, false, at)
+				-- accept string
+				else if ls.token == 'TK_string'
+					var at = ls.loc()
+					key = Expr.string(ls.value, false, at)
+					ls.step()
+				-- accept keyword
+				else
+					var name = is_keyword()
+					if name
+						var at = ls.loc()
+						if ls.token == 'TK_true' or ls.token == 'TK_false'
+							key = Expr.bool(ls.token == 'TK_true', at)
+						else
+							key = Expr.string(name, false, at)
+					else
+						err_syntax("invalid table key " .. (ls_value() or ls.astext(ls.token)))
+					ls.step()
+				lex_check('=')
+
+			var val = expr()
+			n = n + 1
+			vks[n] = { val, key }  -- key can be nil
+
+			dented = lex_opt_dent(dented)
+			if ls.token == ';'
+				err_instead(1, "use `,`")
+			had_sep = lex_opt(',') or lex_opt(';')
+			if not had_sep
+				break
+			if ls.token == '}'
+				err_warn("trailing `,` in table")
+				break
+
+		close_dented(dented, loc.line)
+		lex_match('}', '{', loc.line)
+		return Expr.table(vks, loc)
+
+
+	var expr_function = \loc ->
+		if ls.token == '\\'
+			ls.step()
+		var curry, params, _, body = parse_body(loc.line)
+		var lambda = Expr.function(params, body, loc)
+		if curry
+			var cargs = { Expr.number(#params, loc), lambda }
+			return Expr.call(Expr.id('curry', loc), cargs, loc)
+		return lambda
+
+
+	expr_simple = ->
+		var tk, val = ls.token, ls.value
+		var loc = ls.loc()
+		var e
+		if tk == 'TK_number'
+			e = Expr.number(val, loc)
+		else if tk == 'TK_string'
+			e = Expr.string(val, false, loc)
+		else if tk == 'TK_longstring'
+			e = Expr.string(val, true, loc)
+		else if tk == 'TK_nil'
+			e = Expr.nil(loc)
+		else if tk == 'TK_true'
+			e = Expr.bool(true, loc)
+		else if tk == 'TK_false'
+			e = Expr.bool(false, loc)
+		else if tk == '...'
+			e = Expr.vararg(loc)
+		else if tk == '{'
+			return expr_table(loc)
+		else if tk == '\\' or tk == '->' or tk == '~>'
+			return expr_function(loc)
+		else
+			return expr_primary()
+
+		ls.step()
+		return e
+
+
+	expr_list = ->
+		var exps = {}
+		exps[1] = expr()
+		while ls.token == ','
+			ls.step()
+			exps[#exps + 1] = expr()
+		return exps
+
+
+	expr_unop = ->
+		var tk = ls.token
+		if tk == 'TK_not' or tk == '-' or tk == '#'
+			var loc = ls.loc()
+			ls.step()
+			var v = expr_binop(operator.unary_priority)
+			return Expr.unary(ls.tostr(tk), v, loc)
+		else
+			return expr_simple()
+
+
+	-- Parse binary expressions with priority higher than the limit.
+	expr_binop = \limit ->
+		var v = expr_unop()
+		var op = ls.tostr(ls.token)
+		while operator.is_binop(op) and operator.left_priority(op) > limit
+			var loc = ls.loc()
+			ls.step()
+			var v2, nextop = expr_binop(operator.right_priority(op))
+			v = Expr.binary(op, v, v2, loc)
+			op = nextop
+		return v, op
+
+
+	expr = ->
+		return expr_binop(0) -- Priority 0: parse whole expression.
+
+
+	-- Parse primary and prefix expression
+	expr_primary = ->
+		var v, vk
+		if ls.token == '('
+			var line = ls.loc().line
+			ls.step()
+			vk, v = Kind.Expr, ast.bracket(expr())
+			lex_match(')', '(', line)
+		else
+			var str
+			var loc = ls.loc()
+			if ls.token == 'TK_name'
+				str, loc = lex_str()
+			else
+				err_symbol()
+				str = ls.tostr(ls.token)
+				ls.step()
+			v, vk = Expr.id(str, loc), Kind.Var
+
+		var key
+		while true -- Parse multiple expression suffixes
+			var at = ls.loc()
+			if ls.token == '.'
+				ls.step() -- skip dot
+				var kw = is_keyword()
+				if kw
+					var key_at = ls.loc()
+					if ls.token == 'TK_true' or ls.token == 'TK_false'
+						key = Expr.bool(ls.token == 'TK_true', key_at)
+					else
+						key = Expr.string(kw, false, key_at)
+					vk, v = Kind.Index, Expr.index(v, key, at)
+					ls.step()
+				else
+					key = lex_str()
+					vk, v = Kind.Field, Expr.field(v, key, at)
+			else if ls.token == '['
+				key = expr_bracket()
+				vk, v = Kind.Index, Expr.index(v, key, at)
+			else if ls.token == '(' -- or ls.token == 'TK_string' or ls.token == '{'
+				var args = parse_args()
+				vk, v = Kind.Call, Expr.call(v, args, at)
+			else
+				break
+		return v, vk
+
+	--- Statements ------------------------------------------------
+	var parse_return = \loc ->
+		ls.step() -- skip 'return'
+		var exps
+		if EndOfBlock[ls.token] or NewLine[ls.token]
+			exps = {}
+		else -- return with one or more values
+			exps = expr_list()
+		return Stmt.return(exps, loc)
+
+
+	-- Parse numeric 'for'
+	var parse_for_num = \loc ->
+		var var = Expr.id(lex_str())
+		lex_check('=')
+		var first = expr()
+		lex_check(',')
+		var last = expr()
+		var step
+		if lex_opt(',')
+			step = expr()
+		var body = parse_block(loc.line, 'TK_for')
+		return Stmt.fornum(var, first, last, step, body, loc)
+
+
+	-- Parse 'for' statement
+	var parse_for = \loc ->
+		ls.step()  -- skip 'for'
+		if ls.next() == '='
+			return parse_for_num(loc)
+
+		-- Parse 'for .. in ..'
+		var vars, n = {}, 0
+		do
+			n = n + 1
+			vars[n] = Expr.id(lex_str())
+		until not lex_opt(',')
+		lex_check('TK_in')
+		var exps = expr_list()
+		var body = parse_block(loc.line, 'TK_for')
+		return Stmt.forin(vars, exps, body, loc)
+
+
+	-- Parse function call argument list
+	parse_args = ->
+		var line = ls.loc().line
+		lex_check('(')
+
+		var dented = false
+		var args, a = {}, 0
+		while ls.token ~= ')'
+			dented = lex_opt_dent(dented)
+			-- catch common mistake that mess everything later
+			if not dented and ls.token == 'TK_dedent'
+				err_symbol()
+				ls.step()
+			if ls.token == ')'
+				break
+			a = a + 1
+			args[a] = expr()
+
+			dented = lex_opt_dent(dented)
+			if not lex_opt(',')
+				break
+
+		close_dented(dented, line)
+		lex_match(')', '(', line)
+
+		return args
+
+
+	let parse_assignment = \lhs, v, vk ->
+		if vk ~= Kind.Var and vk ~= Kind.Field and vk ~= Kind.Index
+			err_symbol()
+
+		var loc = ls.loc()
+		lhs[#lhs+1] = v
+		if lex_opt(',')
+			var n_var, n_vk = expr_primary()
+			return parse_assignment(lhs, n_var, n_vk)
+		-- Parse RHS
+		lex_check('=')
+		var exps = expr_list()
+		return Stmt.assign(lhs, exps, loc)
+
+
+	var parse_call_assign = \loc ->
+		var v, vk = expr_primary()
+		if vk == Kind.Call
+			return Stmt.expression(v, loc)
+		var lhs = {}
+		return parse_assignment(lhs, v, vk)
+
+
+	var parse_var = \loc ->
+		var lhs, i = {}, 0
+		do
+			i = i + 1
+			lhs[i] = Expr.id(lex_str())
+		until not lex_opt(',')
+
+		var rhs = {}
+		if lex_opt('=')
+			rhs = expr_list()
+		return Stmt.local(lhs, rhs, loc)
+
+	var parse_let = \loc ->
+		var vars, i = {}, 0
+		do
+			i = i + 1
+			vars[i] = Expr.id(lex_str())
+		until not lex_opt(',')
+		lex_check('=')
+		var rhs = expr_list()
+		return Stmt.let(vars, rhs, loc)
+
+
+	var parse_while = \loc ->
+		ls.step() -- skip 'while'
+		var cond = expr()
+		var body = parse_block(loc.line, 'TK_while')
+		return Stmt.while(cond, body, loc)
+
+
+	var parse_then = \tests, line ->
+		ls.step() -- skip 'if'
+		tests[#tests+1] = expr()
+		if ls.token == 'TK_then'
+			err_warn("`then` is not needed")
+			ls.step()
+		return parse_block(line, 'TK_if')
+
+
+	var parse_if = \loc ->
+		var tests, blocks = {}, {}
+		blocks[#blocks+1] = parse_then(tests, ls.loc().line)
+		var else_branch
+		while ls.token == 'TK_else' or NewLine[ls.token] and ls.next() == 'TK_else'
+			lex_opt('TK_newline')
+			ls.step()
+			if ls.token == 'TK_if'
+				blocks[#blocks+1] = parse_then(tests, ls.loc().line)
+			else
+				else_branch = parse_block(ls.loc().line, 'TK_else')
+				break
+		return Stmt.if(tests, blocks, else_branch, loc)
+
+
+	var parse_do = \loc ->
+		ls.step() -- skip 'do'
+		var body = parse_block(loc.line, 'TK_do')
+		if lex_opt('TK_until')
+			var cond = expr() -- until condition
+			return Stmt.repeat(cond, body, loc)
+		return Stmt.do(body, loc)
+
+
+	var parse_break = \loc ->
+		ls.step()
+		return Stmt.break(loc)
+
+
+	var parse_label = \loc ->
+		ls.step() -- skip '::'
+		var name = lex_str()
+		lex_check('::')
+		return Stmt.label(name, loc)
+
+
+	var parse_goto = \loc ->
+		var name = lex_str()
+		return Stmt.goto(name, loc)
+
+
+	-- Parse one statement
+	-- Returns the statement AST and a bool to indicate if it must be the last one in a chunk
+	let parse_stmt = ->
+		var loc = ls.loc()
+		var stmt
+		if ls.token == 'TK_if'
+			stmt = parse_if(loc)
+		else if ls.token == 'TK_for'
+			stmt = parse_for(loc)
+		else if ls.token == 'TK_while'
+			stmt = parse_while(loc)
+		else if ls.token == 'TK_do'
+			stmt = parse_do(loc)
+		else if ls.token == 'TK_repeat'
+			err_symbol()
+			stmt = parse_do(loc)
+		--else if ls.token == 'TK_function'
+		--	stmt = parse_func()
+		else if ls.token == '\\' or ls.token == '->' or ls.token == '~>'
+			err_syntax("lambda must either be assigned or immediately invoked")
+			stmt = expr_function(loc)
+		else if ls.token == 'TK_name' and ls.value == 'var' and ls.next() == 'TK_name'
+			ls.step()
+			stmt = parse_var(loc)
+		else if ls.token == 'TK_name' and ls.value == 'let' and ls.next() == 'TK_name'
+			ls.step()
+			stmt = parse_let(loc)
+		else if ls.token == 'TK_local'
+			err_symbol()
+			ls.step()
+			stmt = parse_var(loc)
+		else if ls.token == 'TK_return'
+			stmt = parse_return(loc)
+			return stmt, true -- Must be last
+		else if ls.token == 'TK_break'
+			stmt = parse_break(loc)
+			return stmt, false
+		else if ls.token == '::'
+			stmt = parse_label(loc)
+		else if ls.token == 'TK_goto'
+			ls.step()
+			stmt = parse_goto(loc)
+
+		-- is TK_name, must be function call or assignment
+		if not stmt
+			stmt = parse_call_assign(loc)
+		return stmt, false
+
+
+	-- Parse list of statements
+	let parse_stmts = ->
+		var stmt, islast = nil, false
+		var body, b = {}, 0
+		while not islast and not EndOfBlock[ls.token]
+			skip_ends()
+			if EndOfBlock[ls.token]
+				break
+			var stmt_line = ls.loc().line
+			stmt, islast = parse_stmt()
+			b = b + 1
+			body[b] = stmt
+			skip_ends()
+			-- disallow multiple statement in one line
+			if stmt_line == ls.loc().line
+				if ls.token ~= 'TK_eof' and ls.token ~= 'TK_dedent' and ls.next() ~= 'TK_eof'
+					err_instead(3, "statement should end. %s expected", ls.astext('TK_newline'))
+		return body
+
+
+	-- Parse indented single or multiple statements
+	parse_block = \line, match_token ->
+		var body
+		if lex_indent()
+			body = parse_stmts()
+			if not lex_dedent()
+				err_instead(3, "%s expected to end %s at line %d", ls.astext('TK_dedent'), ls.astext(match_token), line)
+		else
+			if not EndOfBlock[ls.token] and not NewLine[ls.token]
+				body = { (parse_stmt()) }  -- single line statement, parenthesis needed coz parse_stmt() returns 2 values
+
+			if EndOfBlock[ls.token] or NewLine[ls.token]
+				lex_opt(';')
+			else
+				err_instead(3, "statement should end near %s. %s expected", ls.astext(match_token), ls.astext('TK_newline'))
+		return body or {}
+
+
+	-- Parse function parameters
+	var parse_params = ->
+		var params, n = {}, 0
+		var varargs = false
+
+		if ls.token ~= '->' and ls.token ~= '~>'
+			do
+				if ls.token == 'TK_name'
+					n = n + 1
+					params[n] = Expr.id(lex_str())
+
+				else if ls.token == '...'
+					var at = ls.loc()
+					ls.step()
+					varargs = true
+					n = n + 1
+					params[n] = Expr.vararg(at)
+					break
+				else
+					err_instead(2, "parameter expected in function declaration")
+			until not lex_opt(',')
+
+		var curry = false
+		if ls.token == '->'
+			ls.step()
+		else if ls.token == '~>'
+			ls.step()
+			curry = true
+			if varargs
+				err_warn("cannot curry variadic parameters with `~>`")
+			if n < 2
+				err_warn("at least 2 parameters needed with `~>`")
+		else
+			err_expect('->')
+		return curry, params, varargs
+
+
+
+	-- Parse function body
+	parse_body = \line ->
+		var curry, params, varargs = parse_params()
+		var body = parse_block(line, '->')
+		return curry, params, varargs, body
+
+
+
+	ls.step()
+	lex_opt('TK_newline')
+	var chunk = parse_stmts()
+	if ls.token ~= 'TK_eof'
+		err_syntax("code should end. unexpected extra " .. ls.astext(ls.token))
+	return chunk
+
+
+

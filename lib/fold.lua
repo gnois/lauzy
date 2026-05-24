@@ -1,5 +1,5 @@
 --
--- Generated from fold.lt
+-- Generated from fold.lau
 --
 
 local curry = require("lib.curry")
