@@ -236,6 +236,8 @@ var Type = {
 		return create(TType.Bot, {})
 	, neg = \inner ->
 		return create(TType.Neg, {inner})
+	, mu = \v, inner ->
+		return create(TType.Mu, {v, inner})
 	, new_var = new_var
 }
 
@@ -244,27 +246,30 @@ var varargs = \t ->
 	t.varargs = true
 	return t
 
-let simplify = \node, seen ->
+let normalize = \node, seen ->
 	seen = seen or {}
 	if not node or "table" ~= type(node)
 		return node
 	if seen[node]
-		return node
+		var bound_var = seen[node]
+		if type(bound_var) == "boolean"
+			bound_var = Type.new_var("mu")
+			seen[node] = bound_var
+		return bound_var
 	seen[node] = true
+
+	var res = node
 
 	if node.tag == TType.Or or node.tag == TType.And
 		var flat = {}
 		for _, v in ipairs(node)
-			var sv = simplify(v, seen)
+			var sv = normalize(v, seen)
 			if sv and sv.tag == node.tag
 				for __, vv in ipairs(sv)
 					flat[#flat + 1] = vv
 			else
 				flat[#flat + 1] = sv
 		flat = dedup(flat)
-		-- Distribute And over Or: (A|B) & C  ->  (A&C) | (B&C)
-		-- This lets compound_type's T & ~T = Bot rule fire on pairs like
-		-- (A|~A) & B, turning them to Bot.
 		if node.tag == TType.And
 			for i, v in ipairs(flat)
 				if v.tag == TType.Or
@@ -277,41 +282,39 @@ let simplify = \node, seen ->
 						var parts = { branch }
 						for __, w in ipairs(rest)
 							parts[#parts + 1] = w
-						branches[#branches + 1] = simplify(compound_type(TType.And, parts), {})
-					return keep_varargs(node, compound_type(TType.Or, branches))
-		return keep_varargs(node, compound_type(node.tag, flat))
+						branches[#branches + 1] = normalize(compound_type(TType.And, parts), {})
+					res = compound_type(TType.Or, branches)
+					break
+		if res == node
+			res = compound_type(node.tag, flat)
 
-	if node.tag == TType.Tuple
+	else if node.tag == TType.Tuple
 		var out = {}
 		for i, v in ipairs(node)
-			out[i] = simplify(v, seen)
-		return keep_varargs(node, Type.tuple(out))
+			out[i] = normalize(v, seen)
+		res = Type.tuple(out)
 
-	if node.tag == TType.Func
-		return keep_varargs(node, {
+	else if node.tag == TType.Func
+		res = {
 			tag = TType.Func
-			, ins = simplify(node.ins, seen)
-			, outs = simplify(node.outs, seen)
-		})
+			, ins = normalize(node.ins, seen)
+			, outs = normalize(node.outs, seen)
+		}
 
-	if node.tag == TType.Tbl
+	else if node.tag == TType.Tbl
 		var out = {}
 		for i, tk in ipairs(node)
 			var key = tk[2]
 			if "table" == type(key)
-				key = simplify(key, seen)
-			out[i] = { simplify(tk[1], seen), key }
-		return keep_varargs(node, Type.tbl(out))
+				key = normalize(key, seen)
+			out[i] = { normalize(tk[1], seen), key }
+		res = Type.tbl(out)
 
-	-- MLstruct: push negations inward with De Morgan's laws and double negation
-	if node.tag == TType.Neg
-		var inner = simplify(node[1], seen)
-		-- ~~A -> A  (double negation elimination)
+	else if node.tag == TType.Neg
+		var inner = normalize(node[1], seen)
 		if inner.tag == TType.Neg
-			return keep_varargs(node, inner[1])
-		-- ~(A | B) -> ~A & ~B  (De Morgan, only when all parts are concrete)
-		-- Avoid expanding type-var unions to prevent infinite unfolding.
-		if inner.tag == TType.Or
+			res = inner[1]
+		else if inner.tag == TType.Or
 			var all_concrete = true
 			for _, v in ipairs(inner)
 				if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot
@@ -320,10 +323,11 @@ let simplify = \node, seen ->
 			if all_concrete
 				var parts = {}
 				for _, v in ipairs(inner)
-					parts[#parts + 1] = simplify(Type.neg(v), {})
-				return keep_varargs(node, compound_type(TType.And, flatten(TType.And, parts)))
-		-- ~(A & B) -> ~A | ~B  (De Morgan, only when all parts are concrete)
-		if inner.tag == TType.And
+					parts[#parts + 1] = normalize(Type.neg(v), {})
+				res = compound_type(TType.And, flatten(TType.And, parts))
+			else
+				res = Type.neg(inner)
+		else if inner.tag == TType.And
 			var all_concrete = true
 			for _, v in ipairs(inner)
 				if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot
@@ -332,14 +336,176 @@ let simplify = \node, seen ->
 			if all_concrete
 				var parts = {}
 				for _, v in ipairs(inner)
-					parts[#parts + 1] = simplify(Type.neg(v), {})
-				return keep_varargs(node, compound_type(TType.Or, flatten(TType.Or, parts)))
-		return keep_varargs(node, Type.neg(inner))
+					parts[#parts + 1] = normalize(Type.neg(v), {})
+				res = compound_type(TType.Or, flatten(TType.Or, parts))
+			else
+				res = Type.neg(inner)
+		else
+			res = Type.neg(inner)
 
-	if node.tag == TType.Top or node.tag == TType.Bot
+	if type(seen[node]) == "table"
+		res = create(TType.Mu, {seen[node], res})
+
+	seen[node] = nil
+	return keep_varargs(node, res)
+
+
+let prune = \node, seen ->
+	seen = seen or {}
+	if not node or "table" ~= type(node)
 		return node
+	if seen[node]
+		return node
+	seen[node] = true
 
-	return node
+	var res = node
+
+	if node.tag == TType.Or or node.tag == TType.And
+		var flat = {}
+		for _, v in ipairs(node)
+			flat[#flat + 1] = prune(v, seen)
+		res = compound_type(node.tag, flat)
+
+	else if node.tag == TType.Tuple
+		var out = {}
+		for i, v in ipairs(node)
+			out[i] = prune(v, seen)
+		res = Type.tuple(out)
+
+	else if node.tag == TType.Func
+		res = {
+			tag = TType.Func
+			, ins = prune(node.ins, seen)
+			, outs = prune(node.outs, seen)
+		}
+
+	else if node.tag == TType.Tbl
+		var out = {}
+		for i, tk in ipairs(node)
+			var key = tk[2]
+			if "table" == type(key)
+				key = prune(key, seen)
+			out[i] = { prune(tk[1], seen), key }
+		res = Type.tbl(out)
+
+	else if node.tag == TType.Neg
+		res = Type.neg(prune(node[1], seen))
+
+	else if node.tag == TType.Mu
+		res = Type.mu(prune(node[1], seen), prune(node[2], seen))
+
+	seen[node] = nil
+	return keep_varargs(node, res)
+
+let calc_polarities = \node, pol, res, seen ->
+	seen = seen or {}
+	if not node or "table" ~= type(node)
+		return res
+	if seen[node]
+		return res
+	seen[node] = true
+
+	if node.tag == TType.New
+		var id = node.id
+		if not res[id]
+			res[id] = {pos = 0, neg = 0}
+		if pol > 0
+			res[id].pos = res[id].pos + 1
+		else if pol < 0
+			res[id].neg = res[id].neg + 1
+		else
+			res[id].pos = res[id].pos + 1
+			res[id].neg = res[id].neg + 1
+
+	else if node.tag == TType.Or or node.tag == TType.And
+		for _, v in ipairs(node)
+			calc_polarities(v, pol, res, seen)
+
+	else if node.tag == TType.Tuple
+		for _, v in ipairs(node)
+			calc_polarities(v, pol, res, seen)
+
+	else if node.tag == TType.Func
+		calc_polarities(node.ins, -pol, res, seen)
+		calc_polarities(node.outs, pol, res, seen)
+
+	else if node.tag == TType.Tbl
+		for _, tk in ipairs(node)
+			calc_polarities(tk[1], 0, res, seen) -- invar
+			if type(tk[2]) == "table"
+				calc_polarities(tk[2], 0, res, seen) -- invar
+
+	else if node.tag == TType.Neg
+		calc_polarities(node[1], -pol, res, seen)
+
+	else if node.tag == TType.Mu
+		calc_polarities(node[2], pol, res, seen)
+
+	seen[node] = nil
+	return res
+
+let inline_bounds = \node, polarities, seen ->
+	seen = seen or {}
+	if not node or "table" ~= type(node)
+		return node
+	if seen[node]
+		return node
+	seen[node] = true
+
+	var res = node
+
+	if node.tag == TType.New
+		var id = node.id
+		var p = polarities[id]
+		if p
+			if p.pos > 0 and p.neg == 0
+				res = Type.bot()
+			else if p.neg > 0 and p.pos == 0
+				res = Type.top()
+
+	else if node.tag == TType.Or or node.tag == TType.And
+		var flat = {}
+		for _, v in ipairs(node)
+			flat[#flat + 1] = inline_bounds(v, polarities, seen)
+		res = compound_type(node.tag, flat)
+
+	else if node.tag == TType.Tuple
+		var out = {}
+		for i, v in ipairs(node)
+			out[i] = inline_bounds(v, polarities, seen)
+		res = Type.tuple(out)
+
+	else if node.tag == TType.Func
+		res = {
+			tag = TType.Func
+			, ins = inline_bounds(node.ins, polarities, seen)
+			, outs = inline_bounds(node.outs, polarities, seen)
+		}
+
+	else if node.tag == TType.Tbl
+		var out = {}
+		for i, tk in ipairs(node)
+			var key = tk[2]
+			if "table" == type(key)
+				key = inline_bounds(key, polarities, seen)
+			out[i] = { inline_bounds(tk[1], polarities, seen), key }
+		res = Type.tbl(out)
+
+	else if node.tag == TType.Neg
+		res = Type.neg(inline_bounds(node[1], polarities, seen))
+
+	else if node.tag == TType.Mu
+		res = Type.mu(inline_bounds(node[1], polarities, seen), inline_bounds(node[2], polarities, seen))
+
+	seen[node] = nil
+	return keep_varargs(node, res)
+
+let simplify = \node, seen ->
+	var n = normalize(node, seen)
+	var p = prune(n, {})
+	var pols = calc_polarities(p, 1, {}, {})
+	var final = inline_bounds(p, pols, {})
+	return final
 
 
 ----------------- type to string ------------------
@@ -434,6 +600,7 @@ Str[TType.And] = flat_renderer(TType.And, '&', Prec[TType.And])
 Str[TType.Top] = -> return "Any"
 Str[TType.Bot] = -> return "None"
 Str[TType.Neg] = \t -> return "~" .. render(t[1], 3)
+Str[TType.Mu] = \t -> return "mu " .. t.id .. ". " .. render(t.inner, 3)
 var tuple_none_t = Type.tuple({})
 
 return {
@@ -450,6 +617,7 @@ return {
 	, or = Type.or
 	, and = Type.and
 	, neg = Type.neg
+	, mu = Type.mu
 	, new_var = Type.new_var
 	, tuple_none = -> return tuple_none_t
 	, varargs = varargs
