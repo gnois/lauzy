@@ -269,6 +269,9 @@ local Type = {
     , neg = function(inner)
         return create(TType.Neg, {inner})
     end
+    , mu = function(v, inner)
+        return create(TType.Mu, {v, inner})
+    end
     , new_var = new_var
 }
 local varargs = function(t)
@@ -276,19 +279,25 @@ local varargs = function(t)
     t.varargs = true
     return t
 end
-local simplify; simplify = function(node, seen)
+local normalize; normalize = function(node, seen)
     seen = seen or {}
     if not node or "table" ~= type(node) then
         return node
     end
     if seen[node] then
-        return node
+        local bound_var = seen[node]
+        if type(bound_var) == "boolean" then
+            bound_var = Type.new_var("mu")
+            seen[node] = bound_var
+        end
+        return bound_var
     end
     seen[node] = true
+    local res = node
     if node.tag == TType.Or or node.tag == TType.And then
         local flat = {}
         for _, v in ipairs(node) do
-            local sv = simplify(v, seen)
+            local sv = normalize(v, seen)
             if sv and sv.tag == node.tag then
                 for __, vv in ipairs(sv) do
                     flat[#flat + 1] = vv
@@ -313,41 +322,39 @@ local simplify; simplify = function(node, seen)
                         for __, w in ipairs(rest) do
                             parts[#parts + 1] = w
                         end
-                        branches[#branches + 1] = simplify(compound_type(TType.And, parts), {})
+                        branches[#branches + 1] = normalize(compound_type(TType.And, parts), {})
                     end
-                    return keep_varargs(node, compound_type(TType.Or, branches))
+                    res = compound_type(TType.Or, branches)
+                    break
                 end
             end
         end
-        return keep_varargs(node, compound_type(node.tag, flat))
-    end
-    if node.tag == TType.Tuple then
+        if res == node then
+            res = compound_type(node.tag, flat)
+        end
+    elseif node.tag == TType.Tuple then
         local out = {}
         for i, v in ipairs(node) do
-            out[i] = simplify(v, seen)
+            out[i] = normalize(v, seen)
         end
-        return keep_varargs(node, Type.tuple(out))
-    end
-    if node.tag == TType.Func then
-        return keep_varargs(node, {tag = TType.Func, ins = simplify(node.ins, seen), outs = simplify(node.outs, seen)})
-    end
-    if node.tag == TType.Tbl then
+        res = Type.tuple(out)
+    elseif node.tag == TType.Func then
+        res = {tag = TType.Func, ins = normalize(node.ins, seen), outs = normalize(node.outs, seen)}
+    elseif node.tag == TType.Tbl then
         local out = {}
         for i, tk in ipairs(node) do
             local key = tk[2]
             if "table" == type(key) then
-                key = simplify(key, seen)
+                key = normalize(key, seen)
             end
-            out[i] = {simplify(tk[1], seen), key}
+            out[i] = {normalize(tk[1], seen), key}
         end
-        return keep_varargs(node, Type.tbl(out))
-    end
-    if node.tag == TType.Neg then
-        local inner = simplify(node[1], seen)
+        res = Type.tbl(out)
+    elseif node.tag == TType.Neg then
+        local inner = normalize(node[1], seen)
         if inner.tag == TType.Neg then
-            return keep_varargs(node, inner[1])
-        end
-        if inner.tag == TType.Or then
+            res = inner[1]
+        elseif inner.tag == TType.Or then
             local all_concrete = true
             for _, v in ipairs(inner) do
                 if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot then
@@ -358,12 +365,13 @@ local simplify; simplify = function(node, seen)
             if all_concrete then
                 local parts = {}
                 for _, v in ipairs(inner) do
-                    parts[#parts + 1] = simplify(Type.neg(v), {})
+                    parts[#parts + 1] = normalize(Type.neg(v), {})
                 end
-                return keep_varargs(node, compound_type(TType.And, flatten(TType.And, parts)))
+                res = compound_type(TType.And, flatten(TType.And, parts))
+            else
+                res = Type.neg(inner)
             end
-        end
-        if inner.tag == TType.And then
+        elseif inner.tag == TType.And then
             local all_concrete = true
             for _, v in ipairs(inner) do
                 if v.tag == TType.New or v.tag == TType.Top or v.tag == TType.Bot then
@@ -374,17 +382,170 @@ local simplify; simplify = function(node, seen)
             if all_concrete then
                 local parts = {}
                 for _, v in ipairs(inner) do
-                    parts[#parts + 1] = simplify(Type.neg(v), {})
+                    parts[#parts + 1] = normalize(Type.neg(v), {})
                 end
-                return keep_varargs(node, compound_type(TType.Or, flatten(TType.Or, parts)))
+                res = compound_type(TType.Or, flatten(TType.Or, parts))
+            else
+                res = Type.neg(inner)
             end
+        else
+            res = Type.neg(inner)
         end
-        return keep_varargs(node, Type.neg(inner))
     end
-    if node.tag == TType.Top or node.tag == TType.Bot then
+    if type(seen[node]) == "table" then
+        res = create(TType.Mu, {seen[node], res})
+    end
+    seen[node] = nil
+    return keep_varargs(node, res)
+end
+local prune; prune = function(node, seen)
+    seen = seen or {}
+    if not node or "table" ~= type(node) then
         return node
     end
-    return node
+    if seen[node] then
+        return node
+    end
+    seen[node] = true
+    local res = node
+    if node.tag == TType.Or or node.tag == TType.And then
+        local flat = {}
+        for _, v in ipairs(node) do
+            flat[#flat + 1] = prune(v, seen)
+        end
+        res = compound_type(node.tag, flat)
+    elseif node.tag == TType.Tuple then
+        local out = {}
+        for i, v in ipairs(node) do
+            out[i] = prune(v, seen)
+        end
+        res = Type.tuple(out)
+    elseif node.tag == TType.Func then
+        res = {tag = TType.Func, ins = prune(node.ins, seen), outs = prune(node.outs, seen)}
+    elseif node.tag == TType.Tbl then
+        local out = {}
+        for i, tk in ipairs(node) do
+            local key = tk[2]
+            if "table" == type(key) then
+                key = prune(key, seen)
+            end
+            out[i] = {prune(tk[1], seen), key}
+        end
+        res = Type.tbl(out)
+    elseif node.tag == TType.Neg then
+        res = Type.neg(prune(node[1], seen))
+    elseif node.tag == TType.Mu then
+        res = Type.mu(prune(node[1], seen), prune(node[2], seen))
+    end
+    seen[node] = nil
+    return keep_varargs(node, res)
+end
+local calc_polarities; calc_polarities = function(node, pol, res, seen)
+    seen = seen or {}
+    if not node or "table" ~= type(node) then
+        return res
+    end
+    if seen[node] then
+        return res
+    end
+    seen[node] = true
+    if node.tag == TType.New then
+        local id = node.id
+        if not res[id] then
+            res[id] = {pos = 0, neg = 0}
+        end
+        if pol > 0 then
+            res[id].pos = res[id].pos + 1
+        elseif pol < 0 then
+            res[id].neg = res[id].neg + 1
+        else
+            res[id].pos = res[id].pos + 1
+            res[id].neg = res[id].neg + 1
+        end
+    elseif node.tag == TType.Or or node.tag == TType.And then
+        for _, v in ipairs(node) do
+            calc_polarities(v, pol, res, seen)
+        end
+    elseif node.tag == TType.Tuple then
+        for _, v in ipairs(node) do
+            calc_polarities(v, pol, res, seen)
+        end
+    elseif node.tag == TType.Func then
+        calc_polarities(node.ins, -pol, res, seen)
+        calc_polarities(node.outs, pol, res, seen)
+    elseif node.tag == TType.Tbl then
+        for _, tk in ipairs(node) do
+            calc_polarities(tk[1], 0, res, seen)
+            if type(tk[2]) == "table" then
+                calc_polarities(tk[2], 0, res, seen)
+            end
+        end
+    elseif node.tag == TType.Neg then
+        calc_polarities(node[1], -pol, res, seen)
+    elseif node.tag == TType.Mu then
+        calc_polarities(node[2], pol, res, seen)
+    end
+    seen[node] = nil
+    return res
+end
+local inline_bounds; inline_bounds = function(node, polarities, seen)
+    seen = seen or {}
+    if not node or "table" ~= type(node) then
+        return node
+    end
+    if seen[node] then
+        return node
+    end
+    seen[node] = true
+    local res = node
+    if node.tag == TType.New then
+        local id = node.id
+        local p = polarities[id]
+        if p then
+            if p.pos > 0 and p.neg == 0 then
+                res = Type.bot()
+            elseif p.neg > 0 and p.pos == 0 then
+                res = Type.top()
+            end
+        end
+    elseif node.tag == TType.Or or node.tag == TType.And then
+        local flat = {}
+        for _, v in ipairs(node) do
+            flat[#flat + 1] = inline_bounds(v, polarities, seen)
+        end
+        res = compound_type(node.tag, flat)
+    elseif node.tag == TType.Tuple then
+        local out = {}
+        for i, v in ipairs(node) do
+            out[i] = inline_bounds(v, polarities, seen)
+        end
+        res = Type.tuple(out)
+    elseif node.tag == TType.Func then
+        res = {tag = TType.Func, ins = inline_bounds(node.ins, polarities, seen), outs = inline_bounds(node.outs, polarities, seen)}
+    elseif node.tag == TType.Tbl then
+        local out = {}
+        for i, tk in ipairs(node) do
+            local key = tk[2]
+            if "table" == type(key) then
+                key = inline_bounds(key, polarities, seen)
+            end
+            out[i] = {inline_bounds(tk[1], polarities, seen), key}
+        end
+        res = Type.tbl(out)
+    elseif node.tag == TType.Neg then
+        res = Type.neg(inline_bounds(node[1], polarities, seen))
+    elseif node.tag == TType.Mu then
+        res = Type.mu(inline_bounds(node[1], polarities, seen), inline_bounds(node[2], polarities, seen))
+    end
+    seen[node] = nil
+    return keep_varargs(node, res)
+end
+local simplify; simplify = function(node, seen)
+    local n = normalize(node, seen)
+    local p = prune(n, {})
+    local pols = calc_polarities(p, 1, {}, {})
+    local final = inline_bounds(p, pols, {})
+    return final
 end
 local Str = {}
 local Prec = {[TType.Or] = 1, [TType.And] = 2, [TType.Func] = 0}
@@ -489,6 +650,9 @@ end
 Str[TType.Neg] = function(t)
     return "~" .. render(t[1], 3)
 end
+Str[TType.Mu] = function(t)
+    return "mu " .. t.id .. ". " .. render(t.inner, 3)
+end
 local tuple_none_t = Type.tuple({})
 return {
     ["nil"] = Type["nil"]
@@ -503,6 +667,7 @@ return {
     , ["or"] = Type["or"]
     , ["and"] = Type["and"]
     , neg = Type.neg
+    , mu = Type.mu
     , new_var = Type.new_var
     , tuple_none = function()
         return tuple_none_t

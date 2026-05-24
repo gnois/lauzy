@@ -46,5 +46,6 @@ return {
 		, Neg = 'Neg' -- Negation
 		, Top = 'Top'
 		, Bot = 'Bot'
+		, Mu = 'Mu' -- Recursive binding
 	}
 }
