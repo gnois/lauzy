@@ -1,27 +1,177 @@
 Introduction
 ----
-Luaty is an indent sensitive language that transpiles to readable Lua.
+lauzy tries to reduce some Lua keywords by being indent sensitive. It transpiles to readable Lua, during which variable types may be guessed and checked.
+Having few syntax features, it can appear like Lua to many code highlighting editors.
 
-It appears like Lua to most syntax highlighting editors, and aims to be usable within minutes to one familiar with Lua.
 
-The transpiler has a built-in static analyzer and an optional type checker.
 
-Its name is a play on *type* homonym - requires less **ty**ping, but more typed than **Lua**.
+Syntax difference
+---
+  * no more `end`, `then`
+  * no more `do` after `for` and `while`
+  * `repeat` becomes `do`
+  * `local` becomes `var` or `let`
+  * `elseif` becomes `else if`
+  * `[[` and `]]` become (multiple) backticks \`
+
+```
+var x                   -- `var` means `local`
+if not x
+   print('x is nil')    -- `then`, `end` not needed
+
+let y = 2               -- `local` but constant
+y = 3                   -- cannot reassign const `y`
+
+--`` this is a long
+comment ``              -- backtick `` means [[]]
+
+```
+
+With backticks, long comments need one extra hyphen to do the [uncomment trick](https://www.lua.org/pil/1.3.html)*
+
+```
+--`
+print(10)         -- commented
+---`              -- ** use 3 hyphens at ending **
+
+
+---`              -- ** add one hyphen at beginning to uncomment **
+print(10)         --> 10
+---`
+```
+
+
+Bare keyword or string literal as table key
+```
+var z = {
+   'a-str' = 'a-str'          -- bare string
+   , var = 7                  -- lauzy keyword
+   , local = 6                -- bare keyword
+   , function = 5
+   , if = \...-> return ...
+   , goto = {true, false}
+}
+assert(z.var == 7)                 -- works
+assert(z.if(z.goto)[2] == false)   -- works too
+```
+
+
+Desugared functions
+  * function is defined as [lambda expression](https://www.lua.org/manual/5.1/manual.html#2.5.9) with `->` or `\param1, param2, ... ->`
+  * named function is declared using `var` or `let`
+  * function call require parenthesis
+  * colon `:` is not allowed. Use `self` or `@` as the first paramenter/argument instead
+
+```
+
+function f()                     -- error: use '->' instead of 'function'
+
+let f = ->                       -- lambda assigned to local f, \ optional if no parameter
+
+\x -> print(x)                   -- error: orphaned lambda expression not allowed
+(\x -> print(x))(3)              -- ok, immediately invoked lambda
+
+print 'a'                        -- error: '=' expected instead of 'a'; although valid in Lua
+print('a')                       -- parenthesis needed
+
+var obj = {
+   value = 3
+   , foo = \@, k ->
+      return k * @.value         -- `@` becomes `self`
+   , ['long-name'] = \@, n ->    -- colon call syntax can't work for special named function in Lua anyway
+      return n + @.value
+}
+
+print(obj:foo(2))                -- error: ':' not recognized
+assert(obj.foo(@, 2) == 6)       -- ok, becomes obj:foo(2)
+
+var get = -> return obj
+print(get()['long-name'](@, 10)) -- `@` just works, get() is only called once
+```
+
+
+
+
+
+Quick start
+---
+
+Only LuaJIT in your path is required.
+Without argument, lauzy will enter a Read-Generate-Eval-Print Loop (RGEPL)
+
+Linux/Unix shell
+```
+chmod +x ./bin/lauzy
+./bin/lauzy
+```
+
+Windows command prompt
+```
+bin\lauzy.bat
+```
+
+
+Assuming lauzy in your path, this runs source.lau (.lau can be omitted) without generating .lua file:
+```
+lauzy /path/to/source
+```
+
+
+Suppose our source files are laid out below, where *main* requires *sub*, which requires *foo* and *bar* under lib/:
+
+```
+├── src/
+│   ├── main.lau
+    ├── sub.lau
+    └── lib/
+        ├── foo.lau
+        ├── bar.lau
+        ├── orphan.lau
+        └── ...
+```
+
+To generate Lua files from *src/main.lau* and its dependencies to *../dst*, specify *../dst* as the second argument. The folder structure of *../dst* should mirror the *src/* folder.
+
+```
+cd src
+lauzy main ../dst
+
+├── src/
+...
+├── dst/
+│   ├── main.lua
+    ├── sub.lua
+    └── lib/
+        ├── foo.lua
+        ├── bar.lua
+        └── ...
+```
+Since orphan.lau is not required, it will be skipped.
+Dynamically constructed require() are skipped too as they cannot be resolved statically.
+
+
+*.lua files will not be overwritten if they exist.
+To force overwrite, use `-f` switch.
+
+To transpile only *main.lau* file without its dependencies, the second argument must end in .lua:
+```
+lauzy [-f] path/main /out/main.lua
+```
+
+Destination ending without .lua is considered a folder, which will be created if it does not exist. For eg:
+```
+lauzy -f main main.lau
+```
+The output main.lua and its dependencies now goes into main.lau/*.lua, so that output file can never overwrite input.
+
+
 
 
 
 Static analyzer
 ---
 
-The built-in static analyzer warns about:
-  * unused variables
-  * shadowed variables in the parent or the same scope
-  * assignment to undeclared (global) variables
-  * assignment having more expressions on the right side than the left
-  * unused labels and illegal gotos
-  * duplicate keys in table constructor
-
-
+During transpile, a built-in static analyzer may complain:
 
 ```
 a = 1                     -- undeclared identifier a
@@ -38,6 +188,8 @@ goto g                    -- goto <g> jumps over variable 'gg' declared at line 
 var gg = 10               -- unused variable 'gg'
 ::g::
 
+::h::                     -- unused label 'h'
+
 var tbl = {
    x = 1
    , x = 3                -- duplicate key 'x' in table
@@ -46,11 +198,10 @@ var tbl = {
 ```
 
 
-Optional static type checker
+Optional type guessing
 ---
 
-Enable `-t` to check type consistency during transpilation.
-Type checking is constraint-based and best-effort (it is intentionally conservative due to Lua dynamic nature).
+Using `-t` switch will cause it to further complain:
 
 ```
 var j = \a -> return a
@@ -68,211 +219,14 @@ if n > 0                  -- operator `>` cannot constrain <num> <: <nil>
 
 ```
 
-Lua code will be generated regardless of warning by the optional type checker.
-
-
-
-
-Syntactical differences from Lua
----
-
-Less syntax boilerplates due to indentation
-  * no more `end`
-  * no more `do` after `for` and `while`
-  * no more `then` after `if`
-
-Minor syntactical changes
-  * `repeat` becomes `do`
-  * `local` becomes `var`
-  * `elseif` becomes `else if`
-  * `[[` and `]]` become backquote(s) \` that can be repeated multiple times
-
-```
-var x = false               -- `var` transpiles to `local`
-if not x
-   print(`"nay"`)           -- `then` and `end` not needed, `"nay"` transpiles to [["nay"]]
-
---`` this is a long
-comment ``
-
-```
-
-Literal string or keyword as table key
-```
-var z = {
-   'a-str' = 'a-str'                         -- string as key
-   , var = 7                                 -- works as in Lua
-   , local = 6                               -- keyword as key
-   , function = 5
-   , if = \...-> return ...
-   , goto = {true, false}
-}
-assert(z.var == 7)                           -- ok, z.var works as in Lua
-assert(z.if(z.goto)[2] == false)             -- works
-```
-
-
-Desugared functions
-  * function is defined using [lambda expression](https://www.lua.org/manual/5.1/manual.html#2.5.9) with `->` or `\param1, param2, ... ->`
-  * a named function is always declared like a variable using `var`
-  * function call always require parenthesis
-  * colon `:` is never used. Use `self` or `@` as the first paramenter or call argument instead
-
-```
-
-function f()                       -- error: use '->' instead of 'function'
-                                    -- note that this syntax creates f in global scope in Lua, unless local is specified
-
-var f = ->                          -- ok, empty lambda assigned to f, \ optional if no parameter
-                                    -- consistent with variable declaration syntax making sure f is always locally scoped
-
-\x -> print(x)                      -- error: lambda expression by itself not allowed
-(\x -> print(x))(3)                 -- ok, immediately invoked lambda
-
-print 'a'                           -- error: '=' expected instead of 'a'; but this is valid in Lua
-print('a')                          -- ok obviously
-
-var obj = {
-   value = 3
-   , foo = \@, k ->
-      return k * @.value            -- `@` transpiles to `self`
-   , ['long-name'] = \@, n ->       -- colon call syntax can't invoke function with special name
-      return n + @.value
-}
-
-print(obj:foo(2))                   -- error: ')' expected instead of ':'
-assert(obj.foo(@, 2) == 6)          -- ok, transpiles to obj:foo(2)
-
-var get = -> return obj
-print(get()['long-name'](@, 10))    -- `@` *just works*, get() is only called once
-```
-
-The differences end here.
-
-
-Some properly indented Lua code can even be [hand converted](https://github.com/gnois/luaty/tree/master/convert.md) to Luaty using just Find and Replace.
-In return, we get
-- mostly shorter codes
-- forced local variable declaration
-- consistent function call and definition syntax
-- static analyzer that may uncover hidden bugs in existing code
-
-
-
-*Due to backquote replacing `[[` and `]]`, long comments need one extra hyphen if we want to use the [uncomment trick](https://www.lua.org/pil/1.3.html)*
-
-
-```
--- Uncommenting long comment trick
-
---`
-print(10)         -- commented out
----`              -- ** use 3 hyphens at the end of comment **
-
--- Now, if we add a single hyphen to the first line, the code is in again:
-
----`
-print(10)         --> 10
----`
-```
-
-
-
-
-Quick start
----
-
-Luaty only requires LuaJIT to run.
-With LuaJIT executable in your path, run luaty through the provided launchers. Without argument, the below will begin a Read-Generate-Eval-Print Loop (RGEPL)
-
-Linux/Unix shell
-```
-chmod +x ./bin/luaty
-./bin/luaty
-```
-
-Windows command prompt
-```
-bin\luaty.bat
-```
-
-
-
-Usage
----
-
-Below assumes luaty has ben added to your path.
-
-To run a luaty source file
-```
-luaty /path/to/source
-```
-source is assumed to end with .lt
-
-
-The transpiler processes its main input file *and its dependencies*, unless it's told otherwise.
-Given a main.lt file with its required .lt files under its subfolders, luaty can transpile and generate a full mirror folder structure of .lua output files.
-
-Suppose our source files are laid out like below, where *main* requires *sub*, which in turn requires *foo* and *bar* under lib folder:
-
-```
-/
-├── src
-│   ├── main.lt
-    ├── sub.lt
-    └── lib/
-        ├── foo.lt
-        ├── bar.lt
-        ├── orphan.lt
-        └── ...
-```
-
-To transpile *src/main.lt* file and its dependencies to */dst*, specify */dst* as the second argument.
-```
-cd src
-luaty main /dst
-```
-If transpilation succeeds, the output should appear like below, with subfolders mirrored:
-```
-/
-├── dst
-│   ├── main.lua
-    ├── sub.lua
-    └── lib/
-        ├── foo.lua
-        ├── bar.lua
-        └── ...
-```
-Since orphan.lt is not required, it will not be processed.
-Also, Lua package.path and dynamically constructed require() are not processed, because they are not statically resolvable.
-
-
-Lua output files will not be overwritten if they exist.
-To force overwriting, use `-f` switch.
-
-To transpile only *main.lt* file without its dependencies, provide a destination ending with .lua
-```
-luaty [-f] path/main /out/main.lua
-```
-
-Destination without .lua is considered a folder, which will be created if it does not exist. For eg:
-```
-luaty -f main main.lt
-```
-The output main.lua and its dependencies goes into main.lt/*.lua, so that output file can never overwrite input.
-
-
-For all the commands above (including RGEPL), static type checker can be enabled by adding `-t` switch. For eg:
-
-```
-luaty -t src
-```
+Optional type complaints do not prevent Lua code generation.
 
 
 
 
 
-The detailed indent (offside) rule
+
+Indent rules
 ---
 
 1. Either tabs or spaces can be used as indent, but not both in a single file.
@@ -280,7 +234,7 @@ The detailed indent (offside) rule
 2. Comments have no indent rule.
 
 3. Blocks such as `if`, `for`, `while`, `do` and lambda expression `->` can have child statement(s).
-   - A single child statement may choose to stay at the same line as its parent
+   - A single child statement may stay at the same line as its parent
    - Multiple child statements must start at an indented newline
 ```
 if true p(1)                    -- Ok, p(1) is the only child statement of `if`
@@ -288,7 +242,7 @@ p(2)
 
 if true p(1) p(2)               -- Error, two statements at the same line, `if` and p(2)
 
-do                              -- Ok, multiple child statements are indented
+do                              -- Ok, multiple child statements must indent
    p(1)
    p(2)
 
@@ -299,7 +253,7 @@ if x == nil for y = 1, 10 do until true else if x == 0 p(x) else if x p(x) else 
 
 ```
 
-4. A table constructor or function call can be indented, but the line having its closing brace/parenthesis must realign back to its starting indent level.
+4. Table constructor or function call can be indented, but the line having its closing brace/parenthesis must realign back to its starting indent level.
 ```
 var y = { 1
    ,
@@ -338,34 +292,23 @@ assert(b == 7)                                  -- each `;` terminates one singl
 
 
 
+
 Development
 ---
 
-Luaty is written in itself and transpiled to Lua. To modify and overwrite luaty itself, use
+lauzy is written in itself and transpiled to Lua. To overwrite itself, use
 ```
-luaty -f lt.lt .
+lauzy -f lau.lau .
 ```
 
-To run tests in the [tests folder](https://github.com/gnois/luaty/tree/master/tests), use
+To run tests in the [tests folder](https://github.com/gnois/lauzy/tree/master/tests), use
 ```
 luajit run-test.lua
 ```
 
-See the [tests folder](https://github.com/gnois/luaty/tree/master/tests) for more code examples, and luaty transpiler and [Losty](https://github.com/gnois/losty) for real world usage.
+For code examples, see lauzy itself or [Losty](https://github.com/gnois/losty).
 
 
-Redistribution notes
----
-
-For easiest cross-platform redistribution:
-
-1. Keep luaty source as-is and ship the repo (or a subset containing `lt.lua`, `term.lua`, `lt/`, `lib/`, and `bin/`) with both launchers.
-2. Include LuaJIT runtime per target OS, or require users to have `luajit` in PATH.
-
-About "without dependency":
-
-- Truly dependency-free delivery requires bundling a LuaJIT runtime into platform-specific binaries/packages.
-- This is typically done as separate Windows and Unix artifacts; there is no single binary that runs on both.
 
 
 
@@ -373,6 +316,6 @@ About "without dependency":
 Acknowledgments
 ---
 
-Luaty is modified from the excellent [LuaJIT Language Toolkit](https://github.com/franko/luajit-lang-toolkit).
+lauzy is modified from the excellent [LuaJIT Language Toolkit](https://github.com/franko/luajit-lang-toolkit).
 
-Some of the tests are gratefully taken and modified from official Lua test suite.
+Some of the tests are gratefully stolen and modified from official Lua test suite.
