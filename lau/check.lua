@@ -2,6 +2,13 @@
 -- Generated from check.lau
 --
 local ty = require("lau.type")
+local t_num = ty.num()
+local t_bool = ty.bool()
+local t_str = ty.str()
+local t_nil = ty["nil"]()
+local t_empty_tbl = ty.tbl({})
+local t_ordered = ty["or"]({t_num, t_str})
+local t_len_op = ty["or"]({t_empty_tbl, t_str})
 local Tag = require("lau.tag")
 local solve = require("lau.solve")
 local TStmt = Tag.Stmt
@@ -21,12 +28,9 @@ return function(scope, stmts, warn, import, typecheck)
     local with_lvl = function(delta, fn, ...)
         local prev = lvl
         lvl = lvl + (delta or 0)
-        local ok, out = pcall(fn, ...)
+        local out1, out2, out3 = fn(...)
         lvl = prev
-        if not ok then
-            error(out, 0)
-        end
-        return out
+        return out1, out2, out3
     end
     local new = function(level)
         return solv.fresh_var(level or lvl)
@@ -144,7 +148,7 @@ return function(scope, stmts, warn, import, typecheck)
         if receiver then
             msg = "receiver `" .. receiver .. "` for " .. msg
         end
-        if check(ty.tbl({}), t, node, msg) then
+        if check(t_empty_tbl, t, node, msg) then
             local tbl = ty.get_tbl(t)
             if tbl then
                 for _, tk in ipairs(tbl) do
@@ -167,7 +171,7 @@ return function(scope, stmts, warn, import, typecheck)
         if pn > 0 and params[pn] and params[pn].varargs then
             pvar = params[pn]
         end
-        local arity_shape = function(types, n, has_varargs)
+        local arity_shape = function(_, n, has_varargs)
             if has_varargs then
                 return "at least " .. n - 1
             end
@@ -251,11 +255,8 @@ return function(scope, stmts, warn, import, typecheck)
     end
     local check_block = function(nodes)
         scope.enter()
-        local ok, err = pcall(check_stmts, nodes)
+        check_stmts(nodes)
         scope.leave()
-        if not ok then
-            error(err, 0)
-        end
     end
     local infer_expr = function(node)
         local rule = Expr[node.tag]
@@ -270,9 +271,9 @@ return function(scope, stmts, warn, import, typecheck)
             local elems = {}
             for _, branch in ipairs(nt) do
                 if branch.tag == TType.Tuple then
-                    elems[#elems + 1] = branch[i] or ty["nil"]()
+                    elems[#elems + 1] = branch[i] or t_nil
                 else
-                    elems[#elems + 1] = i == 1 and branch or ty["nil"]()
+                    elems[#elems + 1] = i == 1 and branch or t_nil
                 end
             end
             if #elems == 0 then
@@ -309,13 +310,13 @@ return function(scope, stmts, warn, import, typecheck)
                 if i == last then
                     local n = or_tuple_len(nt)
                     for j = 1, n do
-                        local elem = or_tuple_elem(nt, j) or ty["nil"]()
+                        local elem = or_tuple_elem(nt, j) or t_nil
                         t = t + 1
                         types[t] = elem
                     end
                 else
                     t = t + 1
-                    types[t] = or_tuple_elem(nt, 1) or ty["nil"]()
+                    types[t] = or_tuple_elem(nt, 1) or t_nil
                 end
             else
                 t = t + 1
@@ -332,16 +333,16 @@ return function(scope, stmts, warn, import, typecheck)
         end
     end
     Expr[TExpr.Nil] = function()
-        return ty["nil"]()
+        return t_nil
     end
     Expr[TExpr.Bool] = function()
-        return ty.bool()
+        return t_bool
     end
     Expr[TExpr.Number] = function()
-        return ty.num()
+        return t_num
     end
     Expr[TExpr.String] = function()
-        return ty.str()
+        return t_str
     end
     Expr[TExpr.Vararg] = function(node)
         if not scope.is_varargs() then
@@ -379,7 +380,7 @@ return function(scope, stmts, warn, import, typecheck)
             ptypes[i] = t
         end
         check_block(node.body)
-        local rtuple = scope.get_returns() or ty.tuple({ty["nil"]()})
+        local rtuple = scope.get_returns() or ty.tuple({t_nil})
         scope.end_func()
         return ty.func(ty.tuple(ptypes), rtuple)
     end
@@ -430,7 +431,7 @@ return function(scope, stmts, warn, import, typecheck)
         if is_string_index(node.idx, it) then
             return check_field(ot, node.idx.value, node)
         end
-        check(ty.tbl({}), ot, node, "indexer ")
+        check(t_empty_tbl, ot, node, "indexer ")
         return new(), ot
     end
     Expr[TExpr.Field] = function(node)
@@ -460,14 +461,14 @@ return function(scope, stmts, warn, import, typecheck)
         local rtype = infer_expr(node.right)
         local op = node.op
         if op == "#" then
-            check_op(ty["or"]({ty.tbl({}), ty.str()}), rtype, node, op, node.right)
-            return ty.num()
+            check_op(t_len_op, rtype, node, op, node.right)
+            return t_num
         end
         if op == "-" then
-            check_op(ty.num(), rtype, node, op, node.right)
-            return ty.num()
+            check_op(t_num, rtype, node, op, node.right)
+            return t_num
         end
-        return ty.bool()
+        return t_bool
     end
     Expr[TExpr.Binary] = function(node)
         local op = node.op
@@ -485,22 +486,22 @@ return function(scope, stmts, warn, import, typecheck)
         if arithmetic(op) or relational(op) then
             if op ~= "==" and op ~= "~=" then
                 if arithmetic(op) then
-                    check_op(ty.num(), ltype, node, op, node.left, "left")
-                    check_op(ty.num(), rtype, node, op, node.right, "right")
+                    check_op(t_num, ltype, node, op, node.left, "left")
+                    check_op(t_num, rtype, node, op, node.right, "right")
                 else
-                    local ordered = ty["or"]({ty.num(), ty.str()})
+                    local ordered = t_ordered
                     check_op(ordered, ltype, node, op, node.left, "left")
                     check_op(ordered, rtype, node, op, node.right, "right")
                 end
             end
             if relational(op) then
-                return ty.bool()
+                return t_bool
             end
         elseif op == ".." then
-            local strnum = ty["or"]({ty.num(), ty.str()})
+            local strnum = t_ordered
             check_op(strnum, rtype, node, op, node.right, "right")
             check_op(strnum, ltype, node, op, node.left, "left")
-            return ty.str()
+            return t_str
         end
         return ty["or"]({ltype, rtype})
     end
@@ -511,7 +512,7 @@ return function(scope, stmts, warn, import, typecheck)
         balance_check(node.vars, node.exprs)
         local rtypes = with_lvl(1, infer_exprs, node.exprs)
         for i, var in ipairs(node.vars) do
-            local rt = rtypes[i] or ty["nil"]()
+            local rt = rtypes[i] or t_nil
             if solv.apply(rt).tag == TType.Func then
                 rt = solv.simplify(rt)
             end
@@ -528,7 +529,7 @@ return function(scope, stmts, warn, import, typecheck)
         end
         local rtypes = with_lvl(1, infer_exprs, node.exprs)
         for i, lvar in ipairs(node.vars) do
-            local rtype = rtypes[i] or ty["nil"]()
+            local rtype = rtypes[i] or t_nil
             solv.extend(placeholders[i], rtype)
             scope.set_const(maybe_self(lvar.name))
         end
@@ -566,7 +567,7 @@ return function(scope, stmts, warn, import, typecheck)
         balance_check(node.lefts, node.rights)
         local rtypes = infer_exprs(node.rights)
         for i, n in ipairs(node.lefts) do
-            local rtype = rtypes[i] or ty["nil"]()
+            local rtype = rtypes[i] or t_nil
             local ltype
             if n.tag == TExpr.Id then
                 if scope.is_const(maybe_self(n.name)) then
@@ -580,7 +581,7 @@ return function(scope, stmts, warn, import, typecheck)
                 end
             else
                 local ot = infer_expr(n.obj)
-                if check(ty.tbl({}), ot, n, assign_msg(n)) then
+                if check(t_empty_tbl, ot, n, assign_msg(n)) then
                     if n.tag == TExpr.Index then
                         local it = infer_expr(n.idx)
                         if is_string_index(n.idx, it) then
@@ -596,9 +597,7 @@ return function(scope, stmts, warn, import, typecheck)
     Stmt[TStmt.Do] = function(node)
         check_block(node.body)
     end
-    local typestr_to_ctor = {number = ty.num, string = ty.str, boolean = ty.bool, ["nil"] = ty["nil"], table = function()
-        return ty.tbl({})
-    end}
+    local typestr_mapping = {number = t_num, string = t_str, boolean = t_bool, ["nil"] = t_nil, table = t_empty_tbl}
     local type_guard = function(test)
         if test.tag ~= TExpr.Binary or test.op ~= "==" then
             return nil
@@ -616,11 +615,11 @@ return function(scope, stmts, warn, import, typecheck)
         if not (call.args[1] and call.args[1].tag == TExpr.Id) then
             return nil
         end
-        local ctor = typestr_to_ctor[strnode.value]
-        if not ctor then
+        local gtype = typestr_mapping[strnode.value]
+        if not gtype then
             return nil
         end
-        return call.args[1].name, ctor()
+        return call.args[1].name, gtype
     end
     local nil_guard = function(test)
         if test.tag == TExpr.Id then
@@ -650,7 +649,7 @@ return function(scope, stmts, warn, import, typecheck)
                 if nname and not negated then
                     local __, orig = scope.declared(nname)
                     if orig then
-                        scope.update_var(nname, ty["and"]({orig, ty.neg(ty["nil"]())}))
+                        scope.update_var(nname, ty["and"]({orig, ty.neg(t_nil)}))
                     end
                     check_block(node.thenss[i])
                     scope.update_var(nname, orig)
@@ -676,7 +675,7 @@ return function(scope, stmts, warn, import, typecheck)
                     local nname = nil_guard(node.tests[i])
                     if nname and not neg_map[nname] then
                         local __, orig = scope.declared(nname)
-                        neg_map[nname] = {orig = orig, neg = ty.neg(ty["nil"]())}
+                        neg_map[nname] = {orig = orig, neg = ty.neg(t_nil)}
                         neg_keys[#neg_keys + 1] = nname
                     end
                 end
@@ -707,12 +706,12 @@ return function(scope, stmts, warn, import, typecheck)
     Stmt[TStmt.Fornum] = function(node)
         scope.enter_fornum()
         local msg = " expression in numeric for "
-        check(ty.num(), infer_expr(node.first), node, "first " .. msg)
-        check(ty.num(), infer_expr(node.last), node, "second " .. msg)
+        check(t_num, infer_expr(node.first), node, "first " .. msg)
+        check(t_num, infer_expr(node.last), node, "second " .. msg)
         if node.step then
-            check(ty.num(), infer_expr(node.step), node, "third " .. msg)
+            check(t_num, infer_expr(node.step), node, "third " .. msg)
         end
-        declare(node.var, ty.num())
+        declare(node.var, t_num)
         check_block(node.body)
         scope.leave()
     end
@@ -755,5 +754,5 @@ return function(scope, stmts, warn, import, typecheck)
     if rtuple and rtuple[1] then
         return solv.simplify(rtuple[1])
     end
-    return ty["nil"]()
+    return t_nil
 end

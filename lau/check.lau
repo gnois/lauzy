@@ -1,4 +1,12 @@
 let ty = require('lau.type')
+
+let t_num = ty.num()
+let t_bool = ty.bool()
+let t_str = ty.str()
+let t_nil = ty.nil()
+let t_empty_tbl = ty.tbl({})
+let t_ordered = ty.or({t_num, t_str})
+let t_len_op = ty.or({t_empty_tbl, t_str})
 let Tag = require('lau.tag')
 let solve = require('lau.solve')
 let TStmt = Tag.Stmt
@@ -22,11 +30,9 @@ return \scope, stmts, warn, import, typecheck ->
 	var with_lvl = \delta, fn, ... ->
 		var prev = lvl
 		lvl = lvl + (delta or 0)
-		var ok, out = pcall(fn, ...)
+		var out1, out2, out3 = fn(...)
 		lvl = prev
-		if not ok
-			error(out, 0)
-		return out
+		return out1, out2, out3
 
 	var new = \level ->
 		return solv.fresh_var(level or lvl)
@@ -128,7 +134,7 @@ return \scope, stmts, warn, import, typecheck ->
 		var msg = "`" .. field .. "` "
 		if receiver
 			msg = "receiver `" .. receiver .. "` for " .. msg
-		if check(ty.tbl({}), t, node, msg)
+		if check(t_empty_tbl, t, node, msg)
 			var tbl = ty.get_tbl(t)
 			if tbl
 				for _, tk in ipairs(tbl)
@@ -148,7 +154,7 @@ return \scope, stmts, warn, import, typecheck ->
 		if pn > 0 and params[pn] and params[pn].varargs
 			pvar = params[pn]
 
-		var arity_shape = \types, n, has_varargs ->
+		var arity_shape = \_, n, has_varargs ->
 			if has_varargs
 				return "at least " .. (n - 1)
 			return tostring(n)
@@ -226,10 +232,8 @@ return \scope, stmts, warn, import, typecheck ->
 
 	var check_block = \nodes ->
 		scope.enter()
-		var ok, err = pcall(check_stmts, nodes)
+		check_stmts(nodes)
 		scope.leave()
-		if not ok
-			error(err, 0)
 
 	var infer_expr = \node ->
 		var rule = Expr[node.tag]
@@ -245,10 +249,10 @@ return \scope, stmts, warn, import, typecheck ->
 			var elems = {}
 			for _, branch in ipairs(nt)
 				if branch.tag == TType.Tuple
-					elems[#elems + 1] = branch[i] or ty.nil()
+					elems[#elems + 1] = branch[i] or t_nil
 				else
 					-- non-tuple branch: treat as single-value
-					elems[#elems + 1] = (i == 1) and branch or ty.nil()
+					elems[#elems + 1] = (i == 1) and branch or t_nil
 			if #elems == 0
 				return nil
 			if #elems == 1
@@ -279,12 +283,12 @@ return \scope, stmts, warn, import, typecheck ->
 				if i == last
 					var n = or_tuple_len(nt)
 					for j = 1, n
-						var elem = or_tuple_elem(nt, j) or ty.nil()
+						var elem = or_tuple_elem(nt, j) or t_nil
 						t = t + 1
 						types[t] = elem
 				else
 					t = t + 1
-					types[t] = or_tuple_elem(nt, 1) or ty.nil()
+					types[t] = or_tuple_elem(nt, 1) or t_nil
 			else
 				t = t + 1
 				types[t] = nt
@@ -298,16 +302,16 @@ return \scope, stmts, warn, import, typecheck ->
 
 	--------- Expressions --------------------
 	Expr[TExpr.Nil] = ->
-		return ty.nil()
+		return t_nil
 
 	Expr[TExpr.Bool] = ->
-		return ty.bool()
+		return t_bool
 
 	Expr[TExpr.Number] = ->
-		return ty.num()
+		return t_num
 
 	Expr[TExpr.String] = ->
-		return ty.str()
+		return t_str
 
 	Expr[TExpr.Vararg] = \node ->
 		if not scope.is_varargs()
@@ -341,7 +345,7 @@ return \scope, stmts, warn, import, typecheck ->
 			ptypes[i] = t
 
 		check_block(node.body)
-		var rtuple = scope.get_returns() or ty.tuple({ty.nil()})
+		var rtuple = scope.get_returns() or ty.tuple({t_nil})
 		scope.end_func()
 		return ty.func(ty.tuple(ptypes), rtuple)
 
@@ -390,7 +394,7 @@ return \scope, stmts, warn, import, typecheck ->
 		-- else key index can be any type
 		-- if index is number, it can be float, so we cannot know
 		-- else index is its runtime value, so we cannot know
-		check(ty.tbl({}), ot, node, "indexer ")
+		check(t_empty_tbl, ot, node, "indexer ")
 		return new(), ot
 
 	Expr[TExpr.Field] = \node ->
@@ -419,13 +423,13 @@ return \scope, stmts, warn, import, typecheck ->
 		var rtype = infer_expr(node.right)
 		var op = node.op
 		if op == '#'
-			check_op(ty.or({ty.tbl({}), ty.str()}), rtype, node, op, node.right)
-			return ty.num()
+			check_op(t_len_op, rtype, node, op, node.right)
+			return t_num
 		if op == '-'
-			check_op(ty.num(), rtype, node, op, node.right)
-			return ty.num()
+			check_op(t_num, rtype, node, op, node.right)
+			return t_num
 		-- op == 'not'
-		return ty.bool()
+		return t_bool
 
 	Expr[TExpr.Binary] = \node ->
 		var op = node.op
@@ -450,20 +454,20 @@ return \scope, stmts, warn, import, typecheck ->
 			-- skip equal and not equal, coz they can compare anything
 			if op ~= '==' and op ~= '~='
 				if arithmetic(op)
-					check_op(ty.num(), ltype, node, op, node.left, "left")
-					check_op(ty.num(), rtype, node, op, node.right, "right")
+					check_op(t_num, ltype, node, op, node.left, "left")
+					check_op(t_num, rtype, node, op, node.right, "right")
 				else
-					var ordered = ty.or({ty.num(), ty.str()})
+					var ordered = t_ordered
 					check_op(ordered, ltype, node, op, node.left, "left")
 					check_op(ordered, rtype, node, op, node.right, "right")
 			if relational(op)
-				return ty.bool()
+				return t_bool
 		else if op == '..'
-			var strnum = ty.or({ty.num(), ty.str()})
+			var strnum = t_ordered
 			-- symmetric check
 			check_op(strnum, rtype, node, op, node.right, "right")
 			check_op(strnum, ltype, node, op, node.left, "left")
-			return ty.str()
+			return t_str
 		-- op == 'or'
 		return ty.or({ltype, rtype})
 
@@ -475,7 +479,7 @@ return \scope, stmts, warn, import, typecheck ->
 		balance_check(node.vars, node.exprs)
 		var rtypes = with_lvl(1, infer_exprs, node.exprs)
 		for i, var in ipairs(node.vars)
-			var rt = rtypes[i] or ty.nil()
+			var rt = rtypes[i] or t_nil
 			-- generalize function types so their param type-vars don't leak upper-bound
 			-- constraints across call sites at the same level (SimpleSub let-generalization)
 			if solv.apply(rt).tag == TType.Func
@@ -493,7 +497,7 @@ return \scope, stmts, warn, import, typecheck ->
 			declare(lvar, ph)
 		var rtypes = with_lvl(1, infer_exprs, node.exprs)
 		for i, lvar in ipairs(node.vars)
-			var rtype = rtypes[i] or ty.nil()
+			var rtype = rtypes[i] or t_nil
 			solv.extend(placeholders[i], rtype)
 			scope.set_const(maybe_self(lvar.name))
 
@@ -532,7 +536,7 @@ return \scope, stmts, warn, import, typecheck ->
 		balance_check(node.lefts, node.rights)
 		var rtypes = infer_exprs(node.rights)
 		for i, n in ipairs(node.lefts)
-			var rtype = rtypes[i] or ty.nil()
+			var rtype = rtypes[i] or t_nil
 			var ltype
 			if n.tag == TExpr.Id
 				if scope.is_const(maybe_self(n.name))
@@ -545,7 +549,7 @@ return \scope, stmts, warn, import, typecheck ->
 						solv.extend(ltype, ty.or({solv.apply(ltype), rtype}))
 			else
 				var ot = infer_expr(n.obj)
-				if check(ty.tbl({}), ot, n, assign_msg(n))
+				if check(t_empty_tbl, ot, n, assign_msg(n))
 					if n.tag == TExpr.Index
 						var it = infer_expr(n.idx)
 						if is_string_index(n.idx, it)
@@ -558,12 +562,12 @@ return \scope, stmts, warn, import, typecheck ->
 		check_block(node.body)
 
 	-- MLstruct: map Lua type() strings to type constructors
-	var typestr_to_ctor = {
-		["number"] = ty.num,
-		["string"] = ty.str,
-		["boolean"] = ty.bool,
-		["nil"] = ty.nil,
-		["table"] = \-> return ty.tbl({})
+	var typestr_mapping = {
+		["number"] = t_num,
+		["string"] = t_str,
+		["boolean"] = t_bool,
+		["nil"] = t_nil,
+		["table"] = t_empty_tbl
 	}
 
 	-- MLstruct: detect type(x) == "typename" guard, return varname and narrowed type
@@ -580,10 +584,10 @@ return \scope, stmts, warn, import, typecheck ->
 			return nil
 		if not (call.args[1] and call.args[1].tag == TExpr.Id)
 			return nil
-		var ctor = typestr_to_ctor[strnode.value]
-		if not ctor
+		var gtype = typestr_mapping[strnode.value]
+		if not gtype
 			return nil
-		return call.args[1].name, ctor()
+		return call.args[1].name, gtype
 
 	-- detect `x` or `not x` where x is an Id: returns name and whether it is negated
 	var nil_guard = \test ->
@@ -613,7 +617,7 @@ return \scope, stmts, warn, import, typecheck ->
 				if nname and not negated
 					var __, orig = scope.declared(nname)
 					if orig
-						scope.update_var(nname, ty.and({orig, ty.neg(ty.nil())}))
+						scope.update_var(nname, ty.and({orig, ty.neg(t_nil)}))
 					check_block(node.thenss[i])
 					scope.update_var(nname, orig)
 				else
@@ -638,7 +642,7 @@ return \scope, stmts, warn, import, typecheck ->
 					var nname = nil_guard(node.tests[i])
 					if nname and not neg_map[nname]
 						var __, orig = scope.declared(nname)
-						neg_map[nname] = { orig = orig, neg = ty.neg(ty.nil()) }
+						neg_map[nname] = { orig = orig, neg = ty.neg(t_nil) }
 						neg_keys[#neg_keys + 1] = nname
 			if #neg_keys > 0
 				for _, gname in ipairs(neg_keys)
@@ -662,12 +666,12 @@ return \scope, stmts, warn, import, typecheck ->
 	Stmt[TStmt.Fornum] = \node ->
 		scope.enter_fornum()
 		var msg = " expression in numeric for "
-		check(ty.num(), infer_expr(node.first), node, "first " .. msg)
-		check(ty.num(), infer_expr(node.last), node, "second " .. msg)
+		check(t_num, infer_expr(node.first), node, "first " .. msg)
+		check(t_num, infer_expr(node.last), node, "second " .. msg)
 		if node.step
-			check(ty.num(), infer_expr(node.step), node, "third " .. msg)
+			check(t_num, infer_expr(node.step), node, "third " .. msg)
 		-- declare var into scope after rhs
-		declare(node.var, ty.num())
+		declare(node.var, t_num)
 		check_block(node.body)
 		scope.leave()
 
@@ -712,6 +716,6 @@ return \scope, stmts, warn, import, typecheck ->
 	-- lua require() can only return single value
 	if rtuple and rtuple[1]
 		return solv.simplify(rtuple[1])
-	return ty.nil()
+	return t_nil
 
 

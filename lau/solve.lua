@@ -45,7 +45,7 @@ return function()
     local find_cooccurring; find_cooccurring = function(root)
         local pos = {}
         local neg = {}
-        local scan; scan = function(n, pol, seen)
+        local scan; scan = function(n, pol, seen_pos, seen_neg)
             if not n or type(n) ~= "table" then
                 return 
             end
@@ -56,51 +56,52 @@ return function()
                 else
                     neg[n.id] = true
                 end
-                local key = n.id .. (pol and "+" or "-")
-                if seen[key] then
+                local seen = pol and seen_pos or seen_neg
+                if seen[n.id] then
                     return 
                 end
-                seen[key] = true
+                seen[n.id] = true
                 local rep = subs[n.id]
                 if rep and rep ~= n then
-                    scan(rep, pol, seen)
+                    scan(rep, pol, seen_pos, seen_neg)
                     return 
                 end
                 local bounds = pol and n.sub or n.sup
                 for _, b in ipairs(bounds) do
-                    scan(b, pol, seen)
+                    scan(b, pol, seen_pos, seen_neg)
                 end
                 return 
             end
+            local seen = pol and seen_pos or seen_neg
             if seen[n] then
                 return 
             end
             seen[n] = true
             if n.tag == TType.Func then
-                scan(n.ins, not pol, seen)
-                scan(n.outs, pol, seen)
+                scan(n.ins, not pol, seen_pos, seen_neg)
+                scan(n.outs, pol, seen_pos, seen_neg)
                 return 
             end
             if n.tag == TType.Tuple or n.tag == TType.Or or n.tag == TType.And then
                 for _, v in ipairs(n) do
-                    scan(v, pol, seen)
+                    scan(v, pol, seen_pos, seen_neg)
                 end
                 return 
             end
             if n.tag == TType.Tbl then
                 for _, tk in ipairs(n) do
-                    scan(tk[1], pol, seen)
+                    scan(tk[1], pol, seen_pos, seen_neg)
                     if type(tk[2]) == "table" then
-                        scan(tk[2], pol, seen)
+                        scan(tk[2], pol, seen_pos, seen_neg)
                     end
                 end
                 return 
             end
             if n.tag == TType.Neg then
-                scan(n[1], not pol, seen)
+                scan(n[1], not pol, seen_pos, seen_neg)
             end
         end
-        scan(root, true, {})
+        scan(root, true, {}, {})
         local co = {}
         for id in pairs(pos) do
             if neg[id] then
@@ -109,9 +110,8 @@ return function()
         end
         return co
     end
-    local coalesce; coalesce = function(node, pol, seen, co_vars)
+    local coalesce; coalesce = function(node, pol, seen_pos, seen_neg, co_vars)
         pol = pol ~= false
-        seen = seen or {}
         if not node then
             return ty["nil"]()
         end
@@ -119,17 +119,17 @@ return function()
             ensure_var(node)
             local rep = subs[node.id]
             if rep and rep ~= node then
-                local result = coalesce(rep, pol, seen, co_vars)
+                local result = coalesce(rep, pol, seen_pos, seen_neg, co_vars)
                 return ty.keep_varargs(node, result)
             end
-            local mark = tostring(node.id) .. (pol and "+" or "-")
-            if seen[mark] then
+            local seen = pol and seen_pos or seen_neg
+            if seen[node.id] then
                 return node
             end
-            seen[mark] = true
+            seen[node.id] = true
             local bounds = pol and node.sub or node.sup
             if #bounds == 0 then
-                seen[mark] = nil
+                seen[node.id] = nil
                 if co_vars and co_vars[node.id] then
                     return ty.keep_varargs(node, ty.new_var(node.id, 0, {}, {}))
                 end
@@ -137,7 +137,7 @@ return function()
             end
             local out = nil
             for _, b in ipairs(bounds) do
-                local c = coalesce(b, pol, seen, co_vars)
+                local c = coalesce(b, pol, seen_pos, seen_neg, co_vars)
                 if out == nil then
                     out = c
                 elseif pol then
@@ -149,7 +149,7 @@ return function()
             if pol and #node.sup > 0 and not (co_vars and co_vars[node.id]) then
                 local sup_out = nil
                 for _, b in ipairs(node.sup) do
-                    local c = coalesce(b, false, seen, co_vars)
+                    local c = coalesce(b, false, seen_pos, seen_neg, co_vars)
                     if sup_out == nil then
                         sup_out = c
                     else
@@ -160,31 +160,31 @@ return function()
                     out = ty["and"]({out or ty.bot(), sup_out})
                 end
             end
-            seen[mark] = nil
+            seen[node.id] = nil
             local result = out or (pol and ty.bot() or ty.top())
             return ty.keep_varargs(node, result)
         end
         if node.tag == TType.Func then
-            return ty.keep_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen, co_vars), outs = coalesce(node.outs, pol, seen, co_vars)})
+            return ty.keep_varargs(node, {tag = TType.Func, ins = coalesce(node.ins, not pol, seen_pos, seen_neg, co_vars), outs = coalesce(node.outs, pol, seen_pos, seen_neg, co_vars)})
         end
         if node.tag == TType.Tuple then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = coalesce(v, pol, seen, co_vars)
+                out[i] = coalesce(v, pol, seen_pos, seen_neg, co_vars)
             end
             return ty.keep_varargs(node, ty.tuple(out))
         end
         if node.tag == TType.Or then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = coalesce(v, pol, seen, co_vars)
+                out[i] = coalesce(v, pol, seen_pos, seen_neg, co_vars)
             end
             return ty.keep_varargs(node, ty["or"](out))
         end
         if node.tag == TType.And then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = coalesce(v, pol, seen, co_vars)
+                out[i] = coalesce(v, pol, seen_pos, seen_neg, co_vars)
             end
             return ty.keep_varargs(node, ty["and"](out))
         end
@@ -193,14 +193,14 @@ return function()
             for i, tk in ipairs(node) do
                 local key = tk[2]
                 if "table" == type(key) then
-                    key = coalesce(key, pol, seen, co_vars)
+                    key = coalesce(key, pol, seen_pos, seen_neg, co_vars)
                 end
-                out[i] = {coalesce(tk[1], pol, seen, co_vars), key}
+                out[i] = {coalesce(tk[1], pol, seen_pos, seen_neg, co_vars), key}
             end
             return ty.keep_varargs(node, ty.tbl(out))
         end
         if node.tag == TType.Neg then
-            return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen, co_vars)))
+            return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen_pos, seen_neg, co_vars)))
         end
         if node.tag == TType.Top or node.tag == TType.Bot then
             return node
@@ -210,7 +210,7 @@ return function()
     local simplify = function(node, pol)
         if node then
             local co_vars = find_cooccurring(node)
-            return ty.simplify(coalesce(node, pol ~= false, {}, co_vars), {})
+            return ty.simplify(coalesce(node, pol ~= false, {}, {}, co_vars), {})
         end
         return node
     end
@@ -503,9 +503,8 @@ return function()
         end
         return 0
     end
-    local extrude; extrude = function(node, pol, lim, cache)
+    local extrude; extrude = function(node, pol, lim, cache_pos, cache_neg)
         node = apply(node)
-        cache = cache or {}
         if not node then
             return node
         end
@@ -514,33 +513,33 @@ return function()
             if (node.level or 0) <= lim then
                 return node
             end
-            local key = tostring(node.id) .. ":" .. (pol and "p" or "n")
-            local nv = cache[key]
+            local cache = pol and cache_pos or cache_neg
+            local nv = cache[node.id]
             if nv then
                 return nv
             end
             nv = fresh_var(lim)
-            cache[key] = nv
+            cache[node.id] = nv
             if pol then
                 push_unique(node.sup, nv)
                 for _, b in ipairs(node.sub) do
-                    nv.sub[#nv.sub + 1] = extrude(b, pol, lim, cache)
+                    nv.sub[#nv.sub + 1] = extrude(b, pol, lim, cache_pos, cache_neg)
                 end
             else
                 push_unique(node.sub, nv)
                 for _, b in ipairs(node.sup) do
-                    nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache)
+                    nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache_pos, cache_neg)
                 end
             end
             return ty.keep_varargs(node, nv)
         end
         if node.tag == TType.Func then
-            return ty.keep_varargs(node, {tag = TType.Func, ins = extrude(node.ins, not pol, lim, cache), outs = extrude(node.outs, pol, lim, cache)})
+            return ty.keep_varargs(node, {tag = TType.Func, ins = extrude(node.ins, not pol, lim, cache_pos, cache_neg), outs = extrude(node.outs, pol, lim, cache_pos, cache_neg)})
         end
         if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And then
             local out = {}
             for i, v in ipairs(node) do
-                out[i] = extrude(v, pol, lim, cache)
+                out[i] = extrude(v, pol, lim, cache_pos, cache_neg)
             end
             return ty.keep_varargs(node, {tag = node.tag, unpack(out)})
         end
@@ -549,14 +548,14 @@ return function()
             for i, tk in ipairs(node) do
                 local key = tk[2]
                 if "table" == type(key) then
-                    key = extrude(key, pol, lim, cache)
+                    key = extrude(key, pol, lim, cache_pos, cache_neg)
                 end
-                out[i] = {extrude(tk[1], pol, lim, cache), key}
+                out[i] = {extrude(tk[1], pol, lim, cache_pos, cache_neg), key}
             end
             return ty.keep_varargs(node, ty.tbl(out))
         end
         if node.tag == TType.Neg then
-            return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache)))
+            return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache_pos, cache_neg)))
         end
         return node
     end
@@ -779,7 +778,7 @@ return function()
             if level_of(rhs) <= lhsv.level then
                 return bind_upper(lhsv, rhs, cache)
             end
-            local rhsx = extrude(rhs, false, lhsv.level, {})
+            local rhsx = extrude(rhs, false, lhsv.level, {}, {})
             return constrain(lhsv, rhsx, cache)
         end
         if rhs.tag == TType.New then
@@ -787,7 +786,7 @@ return function()
             if level_of(lhs) <= rhsv.level then
                 return bind_lower(rhsv, lhs, cache)
             end
-            local lhsx = extrude(lhs, true, rhsv.level, {})
+            local lhsx = extrude(lhs, true, rhsv.level, {}, {})
             return constrain(lhsx, rhsv, cache)
         end
         if lhs.tag == TType.Or then

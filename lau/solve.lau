@@ -43,7 +43,7 @@ return ->
 	let find_cooccurring = \root ->
 		var pos = {}
 		var neg = {}
-		let scan = \n, pol, seen ->
+		let scan = \n, pol, seen_pos, seen_neg ->
 			if not n or type(n) ~= 'table'
 				return
 			if n.tag == TType.New
@@ -54,48 +54,47 @@ return ->
 					pos[n.id] = true
 				else
 					neg[n.id] = true
-				-- Use a polarity-aware key to guard against recursive bounds cycles.
-				var key = n.id .. (pol and "+" or "-")
-				if seen[key]
+				var seen = pol and seen_pos or seen_neg
+				if seen[n.id]
 					return
-				seen[key] = true
+				seen[n.id] = true
 				var rep = subs[n.id]
 				if rep and rep ~= n
-					scan(rep, pol, seen)
+					scan(rep, pol, seen_pos, seen_neg)
 					return
 				var bounds = pol and n.sub or n.sup
 				for _, b in ipairs(bounds)
-					scan(b, pol, seen)
+					scan(b, pol, seen_pos, seen_neg)
 				return
+			var seen = pol and seen_pos or seen_neg
 			if seen[n]
 				return
 			seen[n] = true
 			if n.tag == TType.Func
-				scan(n.ins, not pol, seen)
-				scan(n.outs, pol, seen)
+				scan(n.ins, not pol, seen_pos, seen_neg)
+				scan(n.outs, pol, seen_pos, seen_neg)
 				return
 			if n.tag == TType.Tuple or n.tag == TType.Or or n.tag == TType.And
 				for _, v in ipairs(n)
-					scan(v, pol, seen)
+					scan(v, pol, seen_pos, seen_neg)
 				return
 			if n.tag == TType.Tbl
 				for _, tk in ipairs(n)
-					scan(tk[1], pol, seen)
+					scan(tk[1], pol, seen_pos, seen_neg)
 					if type(tk[2]) == 'table'
-						scan(tk[2], pol, seen)
+						scan(tk[2], pol, seen_pos, seen_neg)
 				return
 			if n.tag == TType.Neg
-				scan(n[1], not pol, seen)
-		scan(root, true, {})
+				scan(n[1], not pol, seen_pos, seen_neg)
+		scan(root, true, {}, {})
 		var co = {}
 		for id in pairs(pos)
 			if neg[id]
 				co[id] = true
 		return co
 
-	let coalesce = \node, pol, seen, co_vars ->
+	let coalesce = \node, pol, seen_pos, seen_neg, co_vars ->
 		pol = pol ~= false
-		seen = seen or {}
 		if not node
 			return ty.nil()
 
@@ -105,17 +104,17 @@ return ->
 			if rep and rep ~= node
 				-- propagate varargs flag when following a substitution
 				-- so that varargs param vars keep their * after being bound to a concrete type
-				var result = coalesce(rep, pol, seen, co_vars)
+				var result = coalesce(rep, pol, seen_pos, seen_neg, co_vars)
 				return ty.keep_varargs(node, result)
-			var mark = tostring(node.id) .. (pol and "+" or "-")
-			if seen[mark]
+			var seen = pol and seen_pos or seen_neg
+			if seen[node.id]
 				return node
-			seen[mark] = true
+			seen[node.id] = true
 			var bounds = pol and node.sub or node.sup
 			-- If this var co-occurs in both polarities, keep it as a named type variable
 			-- (SimpleSub co-occurrence rule) so both positions render with the same name.
 			if #bounds == 0
-				seen[mark] = nil
+				seen[node.id] = nil
 				if co_vars and co_vars[node.id]
 					-- Return a stripped copy (tag + id only, no sub/sup/level) so that
 					-- downstream calls to same()/dedup() cannot follow bound cycles.
@@ -124,7 +123,7 @@ return ->
 			-- do NOT seed with node itself: coalesce replaces a var with the join/meet of its bounds
 			var out = nil
 			for _, b in ipairs(bounds)
-				var c = coalesce(b, pol, seen, co_vars)
+				var c = coalesce(b, pol, seen_pos, seen_neg, co_vars)
 				if out == nil
 					out = c
 				else if pol
@@ -138,14 +137,14 @@ return ->
 			if pol and #node.sup > 0 and not (co_vars and co_vars[node.id])
 				var sup_out = nil
 				for _, b in ipairs(node.sup)
-					var c = coalesce(b, false, seen, co_vars)
+					var c = coalesce(b, false, seen_pos, seen_neg, co_vars)
 					if sup_out == nil
 						sup_out = c
 					else
 						sup_out = ty.and({sup_out, c})
 				if sup_out and sup_out.tag ~= TType.Top
 					out = ty.and({out or ty.bot(), sup_out})
-			seen[mark] = nil
+			seen[node.id] = nil
 			var result = out or (pol and ty.bot() or ty.top())
 			-- preserve varargs flag: a varargs param var coalescing to Top must stay Top*
 			-- so pvar detection in check_args works after module export simplification
@@ -154,26 +153,26 @@ return ->
 		if node.tag == TType.Func
 			return ty.keep_varargs(node, {
 				tag = TType.Func
-				, ins = coalesce(node.ins, not pol, seen, co_vars)
-				, outs = coalesce(node.outs, pol, seen, co_vars)
+				, ins = coalesce(node.ins, not pol, seen_pos, seen_neg, co_vars)
+				, outs = coalesce(node.outs, pol, seen_pos, seen_neg, co_vars)
 			})
 
 		if node.tag == TType.Tuple
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = coalesce(v, pol, seen, co_vars)
+				out[i] = coalesce(v, pol, seen_pos, seen_neg, co_vars)
 			return ty.keep_varargs(node, ty.tuple(out))
 
 		if node.tag == TType.Or
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = coalesce(v, pol, seen, co_vars)
+				out[i] = coalesce(v, pol, seen_pos, seen_neg, co_vars)
 			return ty.keep_varargs(node, ty.or(out))
 
 		if node.tag == TType.And
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = coalesce(v, pol, seen, co_vars)
+				out[i] = coalesce(v, pol, seen_pos, seen_neg, co_vars)
 			return ty.keep_varargs(node, ty.and(out))
 
 		if node.tag == TType.Tbl
@@ -181,13 +180,13 @@ return ->
 			for i, tk in ipairs(node)
 				var key = tk[2]
 				if "table" == type(key)
-					key = coalesce(key, pol, seen, co_vars)
-				out[i] = { coalesce(tk[1], pol, seen, co_vars), key }
+					key = coalesce(key, pol, seen_pos, seen_neg, co_vars)
+				out[i] = { coalesce(tk[1], pol, seen_pos, seen_neg, co_vars), key }
 			return ty.keep_varargs(node, ty.tbl(out))
 
 		-- MLstruct: negation flips polarity
 		if node.tag == TType.Neg
-			return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen, co_vars)))
+			return ty.keep_varargs(node, ty.neg(coalesce(node[1], not pol, seen_pos, seen_neg, co_vars)))
 
 		if node.tag == TType.Top or node.tag == TType.Bot
 			return node
@@ -197,7 +196,7 @@ return ->
 	var simplify = \node, pol ->
 		if node
 			var co_vars = find_cooccurring(node)
-			return ty.simplify(coalesce(node, pol ~= false, {}, co_vars), {})
+			return ty.simplify(coalesce(node, pol ~= false, {}, {}, co_vars), {})
 		return node
 
 	var describe = \node, pol ->
@@ -431,53 +430,53 @@ return ->
 			return level_of(node[1])
 		return 0
 
-	let extrude = \node, pol, lim, cache ->
+	let extrude = \node, pol, lim, cache_pos, cache_neg ->
 		node = apply(node)
-		cache = cache or {}
 		if not node
 			return node
 		if node.tag == TType.New
 			ensure_var(node)
 			if (node.level or 0) <= lim
 				return node
-			var key = tostring(node.id) .. ":" .. (pol and "p" or "n")
-			var nv = cache[key]
+			var cache = pol and cache_pos or cache_neg
+			var nv = cache[node.id]
 			if nv
 				return nv
 			nv = fresh_var(lim)
-			cache[key] = nv
+			cache[node.id] = nv
 			if pol
 				push_unique(node.sup, nv)
 				for _, b in ipairs(node.sub)
-					nv.sub[#nv.sub + 1] = extrude(b, pol, lim, cache)
+					nv.sub[#nv.sub + 1] = extrude(b, pol, lim, cache_pos, cache_neg)
 			else
 				push_unique(node.sub, nv)
 				for _, b in ipairs(node.sup)
-					nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache)
+					nv.sup[#nv.sup + 1] = extrude(b, pol, lim, cache_pos, cache_neg)
 			return ty.keep_varargs(node, nv)
 		if node.tag == TType.Func
 			return ty.keep_varargs(node, {
 				tag = TType.Func
-				, ins = extrude(node.ins, not pol, lim, cache)
-				, outs = extrude(node.outs, pol, lim, cache)
+				, ins = extrude(node.ins, not pol, lim, cache_pos, cache_neg)
+				, outs = extrude(node.outs, pol, lim, cache_pos, cache_neg)
 			})
 		if node.tag == TType.Tuple or node.tag == TType.Or or node.tag == TType.And
 			var out = {}
 			for i, v in ipairs(node)
-				out[i] = extrude(v, pol, lim, cache)
+				out[i] = extrude(v, pol, lim, cache_pos, cache_neg)
 			return ty.keep_varargs(node, { tag = node.tag, unpack(out) })
 		if node.tag == TType.Tbl
 			var out = {}
 			for i, tk in ipairs(node)
 				var key = tk[2]
 				if "table" == type(key)
-					key = extrude(key, pol, lim, cache)
-				out[i] = { extrude(tk[1], pol, lim, cache), key }
+					key = extrude(key, pol, lim, cache_pos, cache_neg)
+				out[i] = { extrude(tk[1], pol, lim, cache_pos, cache_neg), key }
 			return ty.keep_varargs(node, ty.tbl(out))
 		-- MLstruct: negation flips polarity on extrude
 		if node.tag == TType.Neg
-			return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache)))
+			return ty.keep_varargs(node, ty.neg(extrude(node[1], not pol, lim, cache_pos, cache_neg)))
 		return node
+
 
 	var instantiate = \tyexp, lim, to_lvl ->
 		lim = lim or 0
@@ -669,14 +668,14 @@ return ->
 			var lhsv = ensure_var(lhs)
 			if level_of(rhs) <= lhsv.level
 				return bind_upper(lhsv, rhs, cache)
-			var rhsx = extrude(rhs, false, lhsv.level, {})
+			var rhsx = extrude(rhs, false, lhsv.level, {}, {})
 			return constrain(lhsv, rhsx, cache)
 
 		if rhs.tag == TType.New
 			var rhsv = ensure_var(rhs)
 			if level_of(lhs) <= rhsv.level
 				return bind_lower(rhsv, lhs, cache)
-			var lhsx = extrude(lhs, true, rhsv.level, {})
+			var lhsx = extrude(lhs, true, rhsv.level, {}, {})
 			return constrain(lhsx, rhsv, cache)
 
 		if lhs.tag == TType.Or
