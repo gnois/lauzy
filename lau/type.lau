@@ -138,10 +138,27 @@ let concrete_disjoint = \a, b ->
 	if a.tag == TType.Func
 		return b.tag == TType.Tbl or b.tag == TType.Tuple
 	if a.tag == TType.Tbl
-		return b.tag == TType.Func or b.tag == TType.Tuple
+		if b.tag == TType.Func or b.tag == TType.Tuple
+			return true
+		if b.tag == TType.Tbl
+			for _, p_a in ipairs(a)
+				var k_a = p_a[2]
+				if type(k_a) == 'string'
+					for __, p_b in ipairs(b)
+						if p_b[2] == k_a
+							if concrete_disjoint(p_a[1], p_b[1])
+								return true
+			return false
 	-- Tuple vs Func/Tbl (Tuple vs Nil/Val already handled above)
 	if a.tag == TType.Tuple
-		return b.tag == TType.Func or b.tag == TType.Tbl
+		if b.tag == TType.Func or b.tag == TType.Tbl
+			return true
+		if b.tag == TType.Tuple
+			var min_len = math.min(#a, #b)
+			for i = 1, min_len
+				if concrete_disjoint(a[i], b[i])
+					return true
+			return false
 	if b.tag == TType.Tuple
 		return a.tag == TType.Func or a.tag == TType.Tbl
 	return false
@@ -270,21 +287,6 @@ let normalize = \node, seen ->
 			else
 				flat[#flat + 1] = sv
 		flat = dedup(flat)
-		if node.tag == TType.And
-			for i, v in ipairs(flat)
-				if v.tag == TType.Or
-					var rest = {}
-					for j, w in ipairs(flat)
-						if j ~= i
-							rest[#rest + 1] = w
-					var branches = {}
-					for _, branch in ipairs(v)
-						var parts = { branch }
-						for __, w in ipairs(rest)
-							parts[#parts + 1] = w
-						branches[#branches + 1] = normalize(compound_type(TType.And, parts), {})
-					res = compound_type(TType.Or, branches)
-					break
 		if res == node
 			res = compound_type(node.tag, flat)
 
@@ -500,9 +502,81 @@ let inline_bounds = \node, polarities, seen ->
 	seen[node] = nil
 	return keep_varargs(node, res)
 
+let distribute = \node, seen ->
+	seen = seen or {}
+	if not node or "table" ~= type(node)
+		return node
+	if seen[node]
+		return node
+	seen[node] = true
+
+	var res = node
+
+	if node.tag == TType.And
+		var flat = {}
+		for _, v in ipairs(node)
+			flat[#flat + 1] = distribute(v, seen)
+
+		var distributed = false
+		for i, v in ipairs(flat)
+			if v.tag == TType.Or
+				var rest = {}
+				for j, w in ipairs(flat)
+					if j ~= i
+						rest[#rest + 1] = w
+				var branches = {}
+				for _, branch in ipairs(v)
+					var parts = { branch }
+					for __, w in ipairs(rest)
+						parts[#parts + 1] = w
+					branches[#branches + 1] = distribute(compound_type(TType.And, parts), {})
+				res = compound_type(TType.Or, branches)
+				distributed = true
+				break
+		if not distributed
+			res = compound_type(TType.And, flat)
+
+	else if node.tag == TType.Or
+		var flat = {}
+		for _, v in ipairs(node)
+			flat[#flat + 1] = distribute(v, seen)
+		res = compound_type(TType.Or, flat)
+
+	else if node.tag == TType.Tuple
+		var out = {}
+		for i, v in ipairs(node)
+			out[i] = distribute(v, seen)
+		res = Type.tuple(out)
+
+	else if node.tag == TType.Func
+		res = {
+			tag = TType.Func
+			, ins = distribute(node.ins, seen)
+			, outs = distribute(node.outs, seen)
+		}
+
+	else if node.tag == TType.Tbl
+		var out = {}
+		for i, tk in ipairs(node)
+			var key = tk[2]
+			if "table" == type(key)
+				key = distribute(key, seen)
+			out[i] = { distribute(tk[1], seen), key }
+		res = Type.tbl(out)
+
+	else if node.tag == TType.Neg
+		res = Type.neg(distribute(node[1], seen))
+
+	else if node.tag == TType.Mu
+		res = Type.mu(distribute(node[1], seen), distribute(node[2], seen))
+
+	seen[node] = nil
+	return keep_varargs(node, res)
+
 let simplify = \node, seen ->
 	var n = normalize(node, seen)
-	var p = prune(n, {})
+	var d = distribute(n, {})
+	var p = prune(d, {})
 	var pols = calc_polarities(p, 1, {}, {})
 	var final = inline_bounds(p, pols, {})
 	return final

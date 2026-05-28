@@ -5,7 +5,7 @@ local Slab = 2 ^ 13
 local string_reader = function(src)
     local pos = 1
     return function()
-        local chunk = string.sub(src, pos, pos + Slab)
+        local chunk = string.sub(src, pos, pos + Slab - 1)
         local len = #chunk
         if len > 0 then
             pos = pos + len
@@ -116,7 +116,10 @@ local stream = function(source)
         end
         return nil
     end
+    local peek_raw_offs = {}
+    local peek_max = -1
     local advance_raw = function(count)
+        peek_max = -1
         count = count or 1
         while count > 0 do
             if not ensure_loaded(0) then
@@ -151,10 +154,21 @@ local stream = function(source)
         offset = offset or 0
         local seen = 0
         local raw_off = 0
+        if offset <= peek_max then
+            raw_off = peek_raw_offs[offset]
+            seen = offset
+        elseif peek_max >= 0 then
+            raw_off = peek_raw_offs[peek_max]
+            seen = peek_max
+        end
         while true do
             local c = peek_raw(raw_off)
             if not c then
                 return nil
+            end
+            peek_raw_offs[seen] = raw_off
+            if seen > peek_max then
+                peek_max = seen
             end
             if c == "\r" or c == "\n" then
                 if seen == offset then
@@ -176,7 +190,7 @@ local stream = function(source)
             end
         end
     end
-    local next = function()
+    local next_char = function()
         local c = peek_raw(0)
         if not c then
             return nil
@@ -197,12 +211,12 @@ local stream = function(source)
         return c
     end
     local loc = function()
-        return {line = line, col = col}
+        return line, col
     end
     skip_utf8_bom()
     return {
         peek = peek
-        , next = next
+        , next = next_char
         , loc = loc
         , text = source_text
         , line = function()

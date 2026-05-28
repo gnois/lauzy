@@ -155,10 +155,38 @@ local concrete_disjoint; concrete_disjoint = function(a, b)
         return b.tag == TType.Tbl or b.tag == TType.Tuple
     end
     if a.tag == TType.Tbl then
-        return b.tag == TType.Func or b.tag == TType.Tuple
+        if b.tag == TType.Func or b.tag == TType.Tuple then
+            return true
+        end
+        if b.tag == TType.Tbl then
+            for _, p_a in ipairs(a) do
+                local k_a = p_a[2]
+                if type(k_a) == "string" then
+                    for __, p_b in ipairs(b) do
+                        if p_b[2] == k_a then
+                            if concrete_disjoint(p_a[1], p_b[1]) then
+                                return true
+                            end
+                        end
+                    end
+                end
+            end
+            return false
+        end
     end
     if a.tag == TType.Tuple then
-        return b.tag == TType.Func or b.tag == TType.Tbl
+        if b.tag == TType.Func or b.tag == TType.Tbl then
+            return true
+        end
+        if b.tag == TType.Tuple then
+            local min_len = math.min(#a, #b)
+            for i = 1, min_len do
+                if concrete_disjoint(a[i], b[i]) then
+                    return true
+                end
+            end
+            return false
+        end
     end
     if b.tag == TType.Tuple then
         return a.tag == TType.Func or a.tag == TType.Tbl
@@ -307,28 +335,6 @@ local normalize; normalize = function(node, seen)
             end
         end
         flat = dedup(flat)
-        if node.tag == TType.And then
-            for i, v in ipairs(flat) do
-                if v.tag == TType.Or then
-                    local rest = {}
-                    for j, w in ipairs(flat) do
-                        if j ~= i then
-                            rest[#rest + 1] = w
-                        end
-                    end
-                    local branches = {}
-                    for _, branch in ipairs(v) do
-                        local parts = {branch}
-                        for __, w in ipairs(rest) do
-                            parts[#parts + 1] = w
-                        end
-                        branches[#branches + 1] = normalize(compound_type(TType.And, parts), {})
-                    end
-                    res = compound_type(TType.Or, branches)
-                    break
-                end
-            end
-        end
         if res == node then
             res = compound_type(node.tag, flat)
         end
@@ -540,9 +546,82 @@ local inline_bounds; inline_bounds = function(node, polarities, seen)
     seen[node] = nil
     return keep_varargs(node, res)
 end
+local distribute; distribute = function(node, seen)
+    seen = seen or {}
+    if not node or "table" ~= type(node) then
+        return node
+    end
+    if seen[node] then
+        return node
+    end
+    seen[node] = true
+    local res = node
+    if node.tag == TType.And then
+        local flat = {}
+        for _, v in ipairs(node) do
+            flat[#flat + 1] = distribute(v, seen)
+        end
+        local distributed = false
+        for i, v in ipairs(flat) do
+            if v.tag == TType.Or then
+                local rest = {}
+                for j, w in ipairs(flat) do
+                    if j ~= i then
+                        rest[#rest + 1] = w
+                    end
+                end
+                local branches = {}
+                for _, branch in ipairs(v) do
+                    local parts = {branch}
+                    for __, w in ipairs(rest) do
+                        parts[#parts + 1] = w
+                    end
+                    branches[#branches + 1] = distribute(compound_type(TType.And, parts), {})
+                end
+                res = compound_type(TType.Or, branches)
+                distributed = true
+                break
+            end
+        end
+        if not distributed then
+            res = compound_type(TType.And, flat)
+        end
+    elseif node.tag == TType.Or then
+        local flat = {}
+        for _, v in ipairs(node) do
+            flat[#flat + 1] = distribute(v, seen)
+        end
+        res = compound_type(TType.Or, flat)
+    elseif node.tag == TType.Tuple then
+        local out = {}
+        for i, v in ipairs(node) do
+            out[i] = distribute(v, seen)
+        end
+        res = Type.tuple(out)
+    elseif node.tag == TType.Func then
+        res = {tag = TType.Func, ins = distribute(node.ins, seen), outs = distribute(node.outs, seen)}
+    elseif node.tag == TType.Tbl then
+        local out = {}
+        for i, tk in ipairs(node) do
+            local key = tk[2]
+            if "table" == type(key) then
+                key = distribute(key, seen)
+            end
+            out[i] = {distribute(tk[1], seen), key}
+        end
+        res = Type.tbl(out)
+    elseif node.tag == TType.Neg then
+        res = Type.neg(distribute(node[1], seen))
+    elseif node.tag == TType.Mu then
+        res = Type.mu(distribute(node[1], seen), distribute(node[2], seen))
+    end
+    seen[node] = nil
+    return keep_varargs(node, res)
+end
 local simplify; simplify = function(node, seen)
     local n = normalize(node, seen)
-    local p = prune(n, {})
+    local d = distribute(n, {})
+    local p = prune(d, {})
     local pols = calc_polarities(p, 1, {}, {})
     local final = inline_bounds(p, pols, {})
     return final

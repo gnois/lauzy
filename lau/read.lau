@@ -7,7 +7,7 @@ var Slab = 2^13  -- 8K
 var string_reader = \src ->
 	var pos = 1
 	return ->
-		var chunk = string.sub(src, pos, pos + Slab)
+		var chunk = string.sub(src, pos, pos + Slab - 1)
 		var len = #chunk
 		if len > 0
 			pos = pos + len
@@ -104,7 +104,11 @@ var stream = \source ->
 			pos = 1
 		return nil
 
+	var peek_raw_offs = {}
+	var peek_max = -1
+
 	var advance_raw = \count ->
+		peek_max = -1
 		count = count or 1
 		while count > 0
 			if not ensure_loaded(0)
@@ -134,10 +138,22 @@ var stream = \source ->
 		offset = offset or 0
 		var seen = 0
 		var raw_off = 0
+		if offset <= peek_max
+			raw_off = peek_raw_offs[offset]
+			seen = offset
+		else if peek_max >= 0
+			raw_off = peek_raw_offs[peek_max]
+			seen = peek_max
+
 		while true
 			var c = peek_raw(raw_off)
 			if not c
 				return nil
+
+			peek_raw_offs[seen] = raw_off
+			if seen > peek_max
+				peek_max = seen
+
 			if c == '\r' or c == '\n'
 				if seen == offset
 					return '\n'
@@ -153,7 +169,7 @@ var stream = \source ->
 				seen = seen + 1
 				raw_off = raw_off + 1
 
-	var next = ->
+	var next_char = ->
 		var c = peek_raw(0)
 		if not c
 			return nil
@@ -171,13 +187,13 @@ var stream = \source ->
 		return c
 
 	var loc = ->
-		return { line = line, col = col }
+		return line, col
 
 	skip_utf8_bom()
 
 	return {
 		peek = peek
-		, next = next
+		, next = next_char
 		, loc = loc
 		, text = source_text
 		, line = \ -> return line

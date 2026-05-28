@@ -76,12 +76,11 @@ return \stream, warn ->
 
 
 	var nextchar = ->
-		var pos = stream.loc()
+		state.line, state.col = stream.loc()
 		var c = stream.next()
 		if not c
 			c = END_OF_STREAM
 		ch = c
-		state.line, state.col = pos.line, pos.col
 		return c
 
 	var add_buffer = \c ->

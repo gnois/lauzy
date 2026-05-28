@@ -76,13 +76,12 @@ return function(stream, warn)
         warn(state.line, col, 3, string.format(em, ...))
     end
     local nextchar = function()
-        local pos = stream.loc()
+        state.line, state.col = stream.loc()
         local c = stream.next()
         if not c then
             c = END_OF_STREAM
         end
         ch = c
-        state.line, state.col = pos.line, pos.col
         return c
     end
     local add_buffer = function(c)
