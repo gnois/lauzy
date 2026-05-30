@@ -134,17 +134,25 @@ return \scope, stmts, warn, import, typecheck ->
 		var msg = "`" .. field .. "` "
 		if receiver
 			msg = "receiver `" .. receiver .. "` for " .. msg
-		if check(t_empty_tbl, t, node, msg)
-			var tbl = ty.get_tbl(t)
-			if tbl
-				for _, tk in ipairs(tbl)
-					if tk[2] == field
-						return tk[1], t
-				-- key doesnt exist
-				var vt = new()
-				tbl[#tbl + 1] = { vt, field }
-				return vt, t
-		return new(), t
+		-- If t is already a concrete table, look up the field directly
+		var tbl = ty.get_tbl(t)
+		if tbl
+			for _, tk in ipairs(tbl)
+				if tk[2] == field
+					return tk[1], t
+			-- Field not in known table: add it (allows inference / field extension)
+			var vt = new()
+			tbl[#tbl + 1] = { vt, field }
+			return vt, t
+		-- t is a type variable: apply the simplesub structural constraint
+		-- otype <: {field: vt}  so the field type var is connected to the parameter
+		var vt = new()
+		-- snapshot before constraint so the description reflects pre-mutation state
+		var act = typecheck and solv.describe(t) or nil
+		var ok, err = solv.constrain(otype, ty.tbl({{vt, field}}))
+		if not ok and typecheck
+			warn(node.line, node.col, 1, msg .. err .. " [ " .. act .. " ]")
+		return vt, t
 
 	var check_args = \ins, atypes, node, fname ->
 		var params = ins or ty.tuple_none()
@@ -710,12 +718,19 @@ return \scope, stmts, warn, import, typecheck ->
 	-- main chunk is always a vararg function
 	scope.begin_func()
 	scope.varargs()
-	check_block(stmts)
+	scope.enter()
+	check_stmts(stmts)
+	var top_vars = scope.get_vars()
+	scope.leave()
 	var rtuple = scope.get_returns()
 	scope.end_func()
 	-- lua require() can only return single value
+	var main_type = t_nil
 	if rtuple and rtuple[1]
-		return solv.simplify(rtuple[1])
-	return t_nil
+		main_type = solv.simplify(rtuple[1])
+	-- simplify types of top-level vars for display
+	for _, v in ipairs(top_vars)
+		v.type = solv.simplify(v.type)
+	return main_type, top_vars
 
 

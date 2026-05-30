@@ -279,5 +279,12 @@ return function(decls, warn)
         , new_goto = new_goto
         , new_label = new_label
         , new_break = new_break
+        , get_vars = function()
+            local vars = {}
+            for i = bptr.vstart, vtop do
+                vars[#vars + 1] = vstack[i]
+            end
+            return vars
+        end
     }
 end

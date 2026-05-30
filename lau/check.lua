@@ -148,20 +148,24 @@ return function(scope, stmts, warn, import, typecheck)
         if receiver then
             msg = "receiver `" .. receiver .. "` for " .. msg
         end
-        if check(t_empty_tbl, t, node, msg) then
-            local tbl = ty.get_tbl(t)
-            if tbl then
-                for _, tk in ipairs(tbl) do
-                    if tk[2] == field then
-                        return tk[1], t
-                    end
+        local tbl = ty.get_tbl(t)
+        if tbl then
+            for _, tk in ipairs(tbl) do
+                if tk[2] == field then
+                    return tk[1], t
                 end
-                local vt = new()
-                tbl[#tbl + 1] = {vt, field}
-                return vt, t
             end
+            local vt = new()
+            tbl[#tbl + 1] = {vt, field}
+            return vt, t
         end
-        return new(), t
+        local vt = new()
+        local act = typecheck and solv.describe(t) or nil
+        local ok, err = solv.constrain(otype, ty.tbl({{vt, field}}))
+        if not ok and typecheck then
+            warn(node.line, node.col, 1, msg .. err .. " [ " .. act .. " ]")
+        end
+        return vt, t
     end
     local check_args = function(ins, atypes, node, fname)
         local params = ins or ty.tuple_none()
@@ -748,11 +752,18 @@ return function(scope, stmts, warn, import, typecheck)
     end
     scope.begin_func()
     scope.varargs()
-    check_block(stmts)
+    scope.enter()
+    check_stmts(stmts)
+    local top_vars = scope.get_vars()
+    scope.leave()
     local rtuple = scope.get_returns()
     scope.end_func()
+    local main_type = t_nil
     if rtuple and rtuple[1] then
-        return solv.simplify(rtuple[1])
+        main_type = solv.simplify(rtuple[1])
     end
-    return t_nil
+    for _, v in ipairs(top_vars) do
+        v.type = solv.simplify(v.type)
+    end
+    return main_type, top_vars
 end

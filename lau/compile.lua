@@ -105,7 +105,7 @@ return function(options, color)
     local imports = {}
     local import
     local compile; compile = function(source)
-        local ast, typ, luacode
+        local ast, typ, top_vars, luacode
         local s = reader.stream(source)
         local r = report(color, s.text)
         local lexer = lex(s, r.warn)
@@ -119,7 +119,7 @@ return function(options, color)
                             
                         end
                     end
-                    typ = check(sc, ast, r.warn, import, options.typecheck)
+                    typ, top_vars = check(sc, ast, r.warn, import, options.typecheck)
                     ast = transform(ast)
                     if r.continue() then
                         luacode = generate(ast)
@@ -128,7 +128,7 @@ return function(options, color)
             end
         end
         s.text()
-        return typ, luacode, r.as_text()
+        return typ, luacode, r.as_text(), top_vars
     end
     import = function(name, verbatim)
         local mod = imports[name]

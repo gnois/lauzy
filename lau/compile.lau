@@ -115,7 +115,7 @@ return \options, color ->
 
 	-- returns type, code, warns
 	let compile = \source ->
-		var ast, typ, luacode
+		var ast, typ, top_vars, luacode
 		var s = reader.stream(source)
 
 		var r = report(color, s.text)
@@ -127,12 +127,12 @@ return \options, color ->
 					var sc = scope(options.declares, r.warn)
 					if options.single
 						import = ->
-					typ = check(sc, ast, r.warn, import, options.typecheck)
+					typ, top_vars = check(sc, ast, r.warn, import, options.typecheck)
 					ast = transform(ast)
 					if r.continue()
 						luacode = generate(ast)
 		s.text()
-		return typ, luacode, r.as_text()
+		return typ, luacode, r.as_text(), top_vars
 
 
 	-- name follows require('name')

@@ -714,8 +714,10 @@ $ string
 {:} type to type - table
 {} array
 Either:
-  - optional/nillable. If used in func return [:-] means void  <- NOPE
-  ? nil if used by itself. *? means nillable. [$:?] means function taking string, returns nil
+  ? nil if used by itself. #? means num|nil.
+  [$:?] means function taking string, returns nil, or just [$:], bcoz Lua function returns nil by default
+  [$.:#|(!, str)] means func take string, return number or tuple(bool, str)
+
 1,2,3, .. typevar
 Eg:
 var x&6 means var x #
