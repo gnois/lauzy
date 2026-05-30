@@ -611,15 +611,15 @@ return ->
 					var ok = constrain(lhs, ty.neg(t), cache)
 					if ok
 						return true
-				return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+				return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 			-- Same-family checks: types in the same family are NOT disjoint, fail
 			-- nil <: ~nil: nil is not disjoint from nil
 			if lhs.tag == TType.Nil and rinner.tag == TType.Nil
-				return false, "expects " .. describe(rhs) .. ", got nil"
+				return false, "expects " .. describe(rhs, false) .. ", got nil"
 			-- Val(t) <: ~Val(t2): disjoint iff t != t2
 			if lhs.tag == TType.Val and rinner.tag == TType.Val
 				if lhs.type == rinner.type
-					return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+					return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 				return true
 			-- Val or Nil vs Func/Tbl: always disjoint
 			if (lhs.tag == TType.Val or lhs.tag == TType.Nil) and (rinner.tag == TType.Func or rinner.tag == TType.Tbl)
@@ -633,7 +633,7 @@ return ->
 			if lhs.tag == TType.Tbl and rinner.tag == TType.Func
 				return true
 			-- Same complex family (Func/Tbl both): cannot prove disjointness statically
-			return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+			return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 
 		-- ~lhs_inner <: rhs
 		if lhs.tag == TType.Neg
@@ -649,7 +649,7 @@ return ->
 					var ok = constrain(lhs, t, cache)
 					if ok
 						return true
-				return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+				return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 			-- ~A <: B & C: must satisfy all parts
 			if rhs.tag == TType.And
 				for _, t in ipairs(rhs)
@@ -662,7 +662,7 @@ return ->
 			-- because it includes values of all other families too.
 			-- ~nil <: Val/Func/Tbl: similarly, ~nil is not a subtype of any concrete type.
 			-- All concrete rhs cases fall through to false.
-			return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+			return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 
 		if lhs.tag == TType.New
 			var lhsv = ensure_var(lhs)
@@ -748,7 +748,7 @@ return ->
 			if lhs.tag == TType.Val
 				if lhs.type == rhs.type
 					return true
-				return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+				return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 			if lhs.tag == TType.Func
 				var lhs_outs = lhs.outs or ty.tuple_none()
 				var rhs_outs = rhs.outs or ty.tuple_none()
@@ -770,7 +770,7 @@ return ->
 							return false, err
 				return true
 
-		return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+		return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
 
 	return {
 		apply = apply

@@ -161,9 +161,11 @@ return function(scope, stmts, warn, import, typecheck)
         end
         local vt = new()
         local act = typecheck and solv.describe(t) or nil
-        local ok, err = solv.constrain(otype, ty.tbl({{vt, field}}))
+        local expected_tbl = ty.tbl({{vt, field}})
+        local ok, err = solv.constrain(otype, expected_tbl)
         if not ok and typecheck then
-            warn(node.line, node.col, 1, msg .. err .. " [ " .. act .. " ]")
+            local exp = solv.describe(expected_tbl, false)
+            warn(node.line, node.col, 1, msg .. err .. " [ " .. act .. " <: " .. exp .. " ]")
         end
         return vt, t
     end
@@ -516,7 +518,7 @@ return function(scope, stmts, warn, import, typecheck)
         balance_check(node.vars, node.exprs)
         local rtypes = with_lvl(1, infer_exprs, node.exprs)
         for i, var in ipairs(node.vars) do
-            local rt = rtypes[i] or t_nil
+            local rt = ty.scalar(rtypes[i] or t_nil)
             if solv.apply(rt).tag == TType.Func then
                 rt = solv.simplify(rt)
             end
@@ -533,7 +535,7 @@ return function(scope, stmts, warn, import, typecheck)
         end
         local rtypes = with_lvl(1, infer_exprs, node.exprs)
         for i, lvar in ipairs(node.vars) do
-            local rtype = rtypes[i] or t_nil
+            local rtype = ty.scalar(rtypes[i] or t_nil)
             solv.extend(placeholders[i], rtype)
             scope.set_const(maybe_self(lvar.name))
         end

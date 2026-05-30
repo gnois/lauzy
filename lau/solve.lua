@@ -721,14 +721,14 @@ return function()
                         return true
                     end
                 end
-                return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+                return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
             end
             if lhs.tag == TType.Nil and rinner.tag == TType.Nil then
-                return false, "expects " .. describe(rhs) .. ", got nil"
+                return false, "expects " .. describe(rhs, false) .. ", got nil"
             end
             if lhs.tag == TType.Val and rinner.tag == TType.Val then
                 if lhs.type == rinner.type then
-                    return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+                    return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
                 end
                 return true
             end
@@ -744,7 +744,7 @@ return function()
             if lhs.tag == TType.Tbl and rinner.tag == TType.Func then
                 return true
             end
-            return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+            return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
         end
         if lhs.tag == TType.Neg then
             if rhs.tag == TType.Top then
@@ -760,7 +760,7 @@ return function()
                         return true
                     end
                 end
-                return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+                return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
             end
             if rhs.tag == TType.And then
                 for _, t in ipairs(rhs) do
@@ -771,7 +771,7 @@ return function()
                 end
                 return true
             end
-            return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+            return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
         end
         if lhs.tag == TType.New then
             local lhsv = ensure_var(lhs)
@@ -869,7 +869,7 @@ return function()
                 if lhs.type == rhs.type then
                     return true
                 end
-                return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+                return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
             end
             if lhs.tag == TType.Func then
                 local lhs_outs = lhs.outs or ty.tuple_none()
@@ -900,7 +900,7 @@ return function()
                 return true
             end
         end
-        return false, "expects " .. describe(rhs) .. ", got " .. describe(lhs)
+        return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
     end
     return {
         apply = apply

@@ -307,6 +307,17 @@ local varargs = function(t)
     t.varargs = true
     return t
 end
+local scalar = function(t)
+    if not t or not t.varargs then
+        return t
+    end
+    local copy = {}
+    for k, v in pairs(t) do
+        copy[k] = v
+    end
+    copy.varargs = nil
+    return copy
+end
 local normalize; normalize = function(node, seen)
     seen = seen or {}
     if not node or "table" ~= type(node) then
@@ -752,6 +763,7 @@ return {
         return tuple_none_t
     end
     , varargs = varargs
+    , scalar = scalar
     , same = same
     , clone = clone
     , get_tbl = get_tbl

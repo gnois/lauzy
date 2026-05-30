@@ -263,6 +263,17 @@ var varargs = \t ->
 	t.varargs = true
 	return t
 
+-- Return a copy of t with the varargs flag removed (for variable bindings).
+-- A bound variable holds a single value, not a varargs pack.
+var scalar = \t ->
+	if not t or not t.varargs
+		return t
+	var copy = {}
+	for k, v in pairs(t)
+		copy[k] = v
+	copy.varargs = nil
+	return copy
+
 let normalize = \node, seen ->
 	seen = seen or {}
 	if not node or "table" ~= type(node)
@@ -695,6 +706,7 @@ return {
 	, new_var = Type.new_var
 	, tuple_none = -> return tuple_none_t
 	, varargs = varargs
+	, scalar = scalar
 	, same = same
 	, clone = clone
 	, get_tbl = get_tbl
