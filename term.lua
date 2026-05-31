@@ -116,7 +116,13 @@ local repl = function(compile)
         else
             local str = table.concat(list, "\n")
             list = {}
-            local _, code, warns = compile.string(str)
+            local _, code, warns, top_vars = compile.string(str)
+            if top_vars then
+                local ty = require("lau.type")
+                for __, v in ipairs(top_vars) do
+                    write(color.magenta, v.name, color.reset, ": ", ty.tostr(v.type), "\n")
+                end
+            end
             if warns then
                 write(warns)
             end

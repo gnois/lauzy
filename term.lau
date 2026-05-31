@@ -144,7 +144,11 @@ var repl = \compile ->
 		else
 			var str = table.concat(list, "\n")
 			list = {}
-			var _, code, warns = compile.string(str)
+			var _, code, warns, top_vars = compile.string(str)
+			if top_vars
+				var ty = require('lau.type')
+				for __, v in ipairs(top_vars)
+					write(color.magenta, v.name, color.reset, ': ', ty.tostr(v.type), '\n')
 			if warns
 				write(warns)
 			if code
