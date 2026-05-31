@@ -83,6 +83,11 @@ var create = \tag, node ->
 var new_var = \id, level, sub, sup ->
 	return create(TType.New, {id = id, level = level or 0, sub = sub or {}, sup = sup or {}})
 
+-- Counter for fresh Mu-binder ids generated during recursive type normalization.
+-- Each recursive cycle detected in normalize() gets a unique integer id so that
+-- the bound variable is structurally consistent with ordinary type variables.
+var mu_id_counter = 0
+
 var dedup = \list ->
 	var out = {}
 	for _, t in ipairs(list)
@@ -281,7 +286,10 @@ let normalize = \node, seen ->
 	if seen[node]
 		var bound_var = seen[node]
 		if type(bound_var) == "boolean"
-			bound_var = Type.new_var("mu")
+			-- Assign a fresh integer id so the binder is structurally identical to
+			-- ordinary type variables and safe to traverse with the rest of the pipeline.
+			mu_id_counter = mu_id_counter + 1
+			bound_var = Type.new_var(mu_id_counter)
 			seen[node] = bound_var
 		return bound_var
 	seen[node] = true
@@ -685,7 +693,9 @@ Str[TType.And] = flat_renderer(TType.And, '&', Prec[TType.And])
 Str[TType.Top] = -> return "Any"
 Str[TType.Bot] = -> return "None"
 Str[TType.Neg] = \t -> return "~" .. render(t[1], 3)
-Str[TType.Mu] = \t -> return "mu " .. t.id .. ". " .. render(t.inner, 3)
+-- Mu node layout: t[1] = bound type-variable (new_var), t[2] = body type.
+-- t.id and t.inner are never set; access positional fields instead.
+Str[TType.Mu] = \t -> return "mu T" .. t[1].id .. ". " .. render(t[2], 3)
 var tuple_none_t = Type.tuple({})
 
 return {

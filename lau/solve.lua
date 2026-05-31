@@ -771,6 +771,20 @@ return function()
                 end
                 return true
             end
+            if lhs[1].tag == TType.Or then
+                local parts = {}
+                for _, t in ipairs(lhs[1]) do
+                    parts[#parts + 1] = ty.neg(t)
+                end
+                return constrain(ty["and"](parts), rhs, cache)
+            end
+            if lhs[1].tag == TType.And then
+                local parts = {}
+                for _, t in ipairs(lhs[1]) do
+                    parts[#parts + 1] = ty.neg(t)
+                end
+                return constrain(ty["or"](parts), rhs, cache)
+            end
             return false, "expects " .. describe(rhs, false) .. ", got " .. describe(lhs)
         end
         if lhs.tag == TType.New then
@@ -799,32 +813,16 @@ return function()
             return true
         end
         if rhs.tag == TType.Or then
-            local last_err = "cannot match any part of union"
             if lhs.tag == TType.New then
-                local lhsv = ensure_var(lhs)
-                for _, t in ipairs(rhs) do
-                    local sub_n = #lhsv.sub
-                    local sup_n = #lhsv.sup
-                    local ok, err = constrain(lhs, t, cache)
-                    if ok then
-                        return true
-                    end
-                    while #lhsv.sub > sub_n do
-                        lhsv.sub[#lhsv.sub] = nil
-                    end
-                    while #lhsv.sup > sup_n do
-                        lhsv.sup[#lhsv.sup] = nil
-                    end
-                    last_err = err or last_err
+                return bind_upper(ensure_var(lhs), rhs, cache)
+            end
+            local last_err = "cannot match any part of union"
+            for _, t in ipairs(rhs) do
+                local ok, err = constrain(lhs, t, cache)
+                if ok then
+                    return true
                 end
-            else
-                for _, t in ipairs(rhs) do
-                    local ok, err = constrain(lhs, t, cache)
-                    if ok then
-                        return true
-                    end
-                    last_err = err or last_err
-                end
+                last_err = err or last_err
             end
             return false, last_err
         end

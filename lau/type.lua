@@ -95,6 +95,7 @@ end
 local new_var = function(id, level, sub, sup)
     return create(TType.New, {id = id, level = level or 0, sub = sub or {}, sup = sup or {}})
 end
+local mu_id_counter = 0
 local dedup = function(list)
     local out = {}
     for _, t in ipairs(list) do
@@ -326,7 +327,8 @@ local normalize; normalize = function(node, seen)
     if seen[node] then
         local bound_var = seen[node]
         if type(bound_var) == "boolean" then
-            bound_var = Type.new_var("mu")
+            mu_id_counter = mu_id_counter + 1
+            bound_var = Type.new_var(mu_id_counter)
             seen[node] = bound_var
         end
         return bound_var
@@ -741,7 +743,7 @@ Str[TType.Neg] = function(t)
     return "~" .. render(t[1], 3)
 end
 Str[TType.Mu] = function(t)
-    return "mu " .. t.id .. ". " .. render(t.inner, 3)
+    return "mu T" .. t[1].id .. ". " .. render(t[2], 3)
 end
 local tuple_none_t = Type.tuple({})
 return {

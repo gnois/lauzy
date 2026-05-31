@@ -657,6 +657,19 @@ return ->
 					if not ok
 						return false, err
 				return true
+			-- De Morgan for composite negations not yet fully normalized (contain type vars):
+			-- ~(A | B) <: rhs  iff  (~A & ~B) <: rhs
+			if lhs[1].tag == TType.Or
+				var parts = {}
+				for _, t in ipairs(lhs[1])
+					parts[#parts + 1] = ty.neg(t)
+				return constrain(ty.and(parts), rhs, cache)
+			-- ~(A & B) <: rhs  iff  (~A | ~B) <: rhs
+			if lhs[1].tag == TType.And
+				var parts = {}
+				for _, t in ipairs(lhs[1])
+					parts[#parts + 1] = ty.neg(t)
+				return constrain(ty.or(parts), rhs, cache)
 			-- ~A <: concrete: only true when ~Bot (= Top) <: anything, already handled above.
 			-- ~Val(t) <: Val(t2): the complement of a primitive is NOT a subtype of another primitive
 			-- because it includes values of all other families too.
@@ -687,30 +700,18 @@ return ->
 
 		if rhs.tag == TType.Or
 			-- lhs <: A | B: satisfied if lhs fits any alternative.
-			-- If lhs is a type variable, a failed branch may have mutated its bounds (via bind_upper/bind_lower).
-			-- We do a lightweight rollback by remembering just the bound-list lengths before each attempt.
-			-- For concrete lhs no bounds are mutated, so no rollback is needed.
-			var last_err = "cannot match any part of union"
+			-- MLstruct delay rule: if lhs is a type variable, record the whole union as an
+			-- upper bound rather than eagerly branching. When the variable later receives a
+			-- concrete lower bound, constrain(lower, union) resolves which alternative applies.
+			-- This avoids premature branch explosion and incorrect bound mutations on rollback.
 			if lhs.tag == TType.New
-				var lhsv = ensure_var(lhs)
-				for _, t in ipairs(rhs)
-					var sub_n = #lhsv.sub
-					var sup_n = #lhsv.sup
-					var ok, err = constrain(lhs, t, cache)
-					if ok
-						return true
-					-- rollback any bounds appended during this failed attempt
-					while #lhsv.sub > sub_n
-						lhsv.sub[#lhsv.sub] = nil
-					while #lhsv.sup > sup_n
-						lhsv.sup[#lhsv.sup] = nil
-					last_err = err or last_err
-			else
-				for _, t in ipairs(rhs)
-					var ok, err = constrain(lhs, t, cache)
-					if ok
-						return true
-					last_err = err or last_err
+				return bind_upper(ensure_var(lhs), rhs, cache)
+			var last_err = "cannot match any part of union"
+			for _, t in ipairs(rhs)
+				var ok, err = constrain(lhs, t, cache)
+				if ok
+					return true
+				last_err = err or last_err
 			return false, last_err
 
 		if lhs.tag == TType.And
