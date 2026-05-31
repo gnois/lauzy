@@ -9,6 +9,7 @@ local parse = require("lau.parse")
 local check = require("lau.check")
 local transform = require("lau.transform")
 local generate = require("lau.generate")
+local MAX_WARNS = 100
 local Circular = {}
 local split_lines = function(src)
     local out = {}
@@ -60,7 +61,7 @@ local report = function(color, get_source)
             return 
         end
         total_warns = total_warns + 1
-        if total_warns > 20 then
+        if total_warns > MAX_WARNS then
             return 
         end
         local w = {line = line, col = col, severity = severity, msg = msg}

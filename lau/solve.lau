@@ -573,10 +573,10 @@ return ->
 			return true
 
 		if lhs.tag == TType.Top and rhs.tag ~= TType.Top
-			return false, "cannot constrain Any to narrower type"
+			return false, describe(rhs, false) .. " expected instead of Any"
 
-		if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot
-			return false, "cannot constrain non-bottom to None"
+		if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot and lhs.tag ~= TType.New
+			return false, describe(lhs) .. " cannot be passed where no value expected"
 
 		-- MLstruct: negation constraint rules
 		-- lhs <: ~rinner  holds iff lhs and rinner are disjoint

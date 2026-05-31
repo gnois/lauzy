@@ -680,10 +680,10 @@ return function()
             return true
         end
         if lhs.tag == TType.Top and rhs.tag ~= TType.Top then
-            return false, "cannot constrain Any to narrower type"
+            return false, describe(rhs, false) .. " expected instead of Any"
         end
-        if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot then
-            return false, "cannot constrain non-bottom to None"
+        if rhs.tag == TType.Bot and lhs.tag ~= TType.Bot and lhs.tag ~= TType.New then
+            return false, describe(lhs) .. " cannot be passed where no value expected"
         end
         if rhs.tag == TType.Neg then
             local rinner = rhs[1]

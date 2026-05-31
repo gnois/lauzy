@@ -7,6 +7,7 @@ let check = require('lau.check')
 let transform = require('lau.transform')
 let generate = require('lau.generate')
 
+let MAX_WARNS = 100
 let Circular = {}
 
 var split_lines = \src ->
@@ -58,7 +59,7 @@ var report = \color, get_source ->
 				return
 
 			total_warns = total_warns + 1
-			if total_warns > 20
+			if total_warns > MAX_WARNS
 				return
 
 			var w = { line = line, col = col, severity = severity, msg = msg }
