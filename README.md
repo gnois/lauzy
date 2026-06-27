@@ -1,14 +1,14 @@
 Introduction
 ----
-lauzy tries to reduce some Lua keywords by being indent sensitive. It transpiles to readable Lua, during which variable types may be guessed and checked.
-Having few syntax features, it can appear like Lua to many code highlighting editors.
+lauzy is indent-sensitive and transpiles to readable Lua. It appears like Lua to most code highlighters.
 
+It has a basic type guesser and a few differences from Lua.
 
 
 Syntax difference
 ---
-  * no more `end`, `then`
-  * no more `do` after `for` and `while`
+  * no `end`, `then`
+  * no `do` after `for` and `while`
   * `repeat` becomes `do`
   * `local` becomes `var` or `let`
   * `elseif` becomes `else if`
@@ -57,8 +57,8 @@ assert(z.if(z.goto)[2] == false)   -- works too
 
 
 Desugared functions
-  * function is defined as [lambda expression](https://www.lua.org/manual/5.1/manual.html#2.5.9) with `->` or `\param1, param2, ... ->`
-  * named function is declared using `var` or `let`
+  * function must be [lambda expression](https://www.lua.org/manual/5.1/manual.html#2.5.9) with `->` or `\param1, param2, ... ->`
+  * function is named using `var` or `let`
   * function call require parenthesis
   * colon `:` is not allowed. Use `self` or `@` as the first paramenter/argument instead
 
@@ -96,24 +96,16 @@ print(get()['long-name'](@, 10)) -- `@` just works, get() is only called once
 Quick start
 ---
 
-Only LuaJIT in your path is required.
-Without argument, lauzy will enter a Read-Generate-Eval-Print Loop (RGEPL)
-
-Linux/Unix shell
+bin/lau.zy is a compiled bytecode with no dependency except LuaJIT.
+Without argument, this enters a Read-Generate-Eval-Print Loop (RGEPL):
 ```
-chmod +x ./bin/lauzy
-./bin/lauzy
-```
-
-Windows command prompt
-```
-bin\lauzy.bat
+luajit bin/lau.zy
 ```
 
 
-Assuming lauzy in your path, this runs source.lau (.lau can be omitted) without generating .lua file:
+Run source.lau (.lau can be omitted) without generating .lua file:
 ```
-lauzy /path/to/source
+luajit bin/lau.zy /path/to/source
 ```
 
 
@@ -146,14 +138,14 @@ lauzy main ../dst
         ├── bar.lua
         └── ...
 ```
-Since orphan.lau is not required, it will be skipped.
-Dynamically constructed require() are skipped too as they cannot be resolved statically.
+orphan.lau is skipped because it is not depended by any files.
+Dynamically constructed require() files are skipped too.
 
 
 *.lua files will not be overwritten if they exist.
 To force overwrite, use `-f` switch.
 
-To transpile only *main.lau* file without its dependencies, the second argument must end in .lua:
+To transpile only *main.lau* file without its dependencies, provide a second argument that end in .lua:
 ```
 lauzy [-f] path/main /out/main.lua
 ```
@@ -162,7 +154,7 @@ Destination ending without .lua is considered a folder, which will be created if
 ```
 lauzy -f main main.lau
 ```
-The output main.lua and its dependencies now goes into main.lau/*.lua, so that output file can never overwrite input.
+The output main.lua and its dependencies now goes into main.lau/*.lua, so  output file can never overwrite input.
 
 
 
@@ -198,7 +190,7 @@ var tbl = {
 ```
 
 
-Optional type guessing
+Optional type guesser
 ---
 
 Using `-t` switch will cause it to further complain:
@@ -219,7 +211,7 @@ if n > 0                  -- operator `>` cannot constrain <num> <: <nil>
 
 ```
 
-Optional type complaints do not prevent Lua code generation.
+Type guessing messages do not prevent Lua code generation.
 
 
 
@@ -237,16 +229,16 @@ Indent rules
    - A single child statement may stay at the same line as its parent
    - Multiple child statements must start at an indented newline
 ```
-if true p(1)                    -- Ok, p(1) is the only child statement of `if`
+if true p(1)                 -- Ok, p(1) is the only child statement of `if`
 p(2)
 
-if true p(1) p(2)               -- Error, two statements at the same line, `if` and p(2)
+if true p(1) p(2)            -- Error, two statements at the same line, `if` and p(2)
 
-do                              -- Ok, multiple child statements must indent
+do                           -- Ok, multiple child statements must indent
    p(1)
    p(2)
 
-print((-> return 'a', 1)())     -- Ok, immediately invoked one lined lambda expression
+print((-> return 'a', 1)())  -- Ok, immediately invoked one lined lambda expression
 
 if x == nil for y = 1, 10 do until true else if x == 0 p(x) else if x p(x) else assert(not x)
                 -- Ok, `do` is the sole children of `for`, which in turn is the sole children of `if`
@@ -257,18 +249,18 @@ if x == nil for y = 1, 10 do until true else if x == 0 p(x) else if x p(x) else 
 ```
 var y = { 1
    ,
-   2}                    -- Error: <dedent> expected
+   2}               -- Error: <dedent> expected
 
 var z = { 1
    ,
    2
-}                        -- Ok, last line realign back with a dedent
+}                   -- Ok, last line realign back with a dedent
 
 print(
    1,
    2
-   , 3,                  -- commas can be anywhere
-4, 5)                    -- Ok, last line realign back to `print(`
+   , 3,             -- commas can be anywhere
+4, 5)               -- Ok, last line realign back to `print(`
 
 ```
 
