@@ -96,14 +96,14 @@ print(get()['long-name'](@, 10)) -- `@` just works, get() is only called once
 Quick start
 ---
 
-bin/lau.zy is a compiled bytecode with no dependency except LuaJIT.
+`bin/lau.zy` is a compiled bytecode with no dependency except LuaJIT.
 Without argument, this enters a Read-Generate-Eval-Print Loop (RGEPL):
 ```
 luajit bin/lau.zy
 ```
 
 
-Run source.lau (.lau can be omitted) without generating .lua file:
+Run */path/to/source.lau* (.lau can be omitted) without generating .lua file:
 ```
 luajit bin/lau.zy /path/to/source
 ```
@@ -138,8 +138,8 @@ lauzy main ../dst
         ├── bar.lua
         └── ...
 ```
-orphan.lau is skipped because it is not depended by any files.
-Dynamically constructed require() files are skipped too.
+*orphan.lau* is skipped because it is not depended by any files.
+Dynamically constructed `require()` files are skipped too.
 
 
 *.lua files will not be overwritten if they exist.
@@ -290,7 +290,7 @@ Development
 
 lauzy is written in itself and transpiled to Lua. To overwrite itself, use
 ```
-lauzy -f lau.lau .
+make
 ```
 
 To run tests in the [tests folder](https://github.com/gnois/lauzy/tree/master/tests), use

@@ -4,7 +4,7 @@ set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
 pushd "%ROOT%"
 
-luajit lau.lua -f lau.lau .
+luajit lau.lua -t -f lau.lau .
 if errorlevel 1 goto :fail
 
 luajit build.lua
