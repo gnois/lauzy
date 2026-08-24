@@ -126,6 +126,9 @@ var keep_varargs = \src, dst ->
 -- meaning they can never share a value.  Used to drop trivially satisfied
 -- negation constraints in intersections: X & ~Y = X when disjoint(X, Y).
 let concrete_disjoint = \a, b ->
+	-- Bot (None) is disjoint from everything; Top (Any) is disjoint from nothing
+	if a.tag == TType.Bot or b.tag == TType.Bot
+		return true
 	-- Nil vs Val/Func/Tbl/Tuple
 	if a.tag == TType.Nil
 		return b.tag == TType.Val or b.tag == TType.Func or b.tag == TType.Tbl or b.tag == TType.Tuple
@@ -257,6 +260,11 @@ var Type = {
 	, bot = ->
 		return create(TType.Bot, {})
 	, neg = \inner ->
+		-- MLstruct: extremes are their own complements: ~Any = None, ~None = Any
+		if inner.tag == TType.Top
+			return create(TType.Bot, {})
+		if inner.tag == TType.Bot
+			return create(TType.Top, {})
 		return create(TType.Neg, {inner})
 	, mu = \v, inner ->
 		return create(TType.Mu, {v, inner})
@@ -731,7 +739,7 @@ return {
 # number
 $ string
 ! bool
-. vararg <- perhaps not needed
+. vararg, but perhaps not needed
 [:] type tuple to type tuple - function
 {:} type to type - table
 {} array
@@ -740,8 +748,25 @@ Either:
   [$:?] means function taking string, returns nil, or just [$:], bcoz Lua function returns nil by default
   [$.:#|(!, str)] means func take string, return number or tuple(bool, str)
 
-1,2,3, .. typevar
-Eg:
-var x&6 means var x #
+Eg declaration:
+
 var y $#!  means y is a value type
+
 --``
+
+
+--``
+num
+str
+bool
+nil
+num?
+num | str
+num & ~nil
+Any
+None
+(num, str?) -> (bool, str)
+{x: num, y: str}
+{[str]: num}
+mu T1. {head: num, tail: T1 | nil}
+``

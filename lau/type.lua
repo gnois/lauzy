@@ -137,6 +137,9 @@ local keep_varargs = function(src, dst)
     return dst
 end
 local concrete_disjoint; concrete_disjoint = function(a, b)
+    if a.tag == TType.Bot or b.tag == TType.Bot then
+        return true
+    end
     if a.tag == TType.Nil then
         return b.tag == TType.Val or b.tag == TType.Func or b.tag == TType.Tbl or b.tag == TType.Tuple
     end
@@ -296,6 +299,12 @@ local Type = {
         return create(TType.Bot, {})
     end
     , neg = function(inner)
+        if inner.tag == TType.Top then
+            return create(TType.Bot, {})
+        end
+        if inner.tag == TType.Bot then
+            return create(TType.Top, {})
+        end
         return create(TType.Neg, {inner})
     end
     , mu = function(v, inner)

@@ -498,6 +498,7 @@ return function(scope, stmts, warn, import, typecheck)
                     local ordered = t_ordered
                     check_op(ordered, ltype, node, op, node.left, "left")
                     check_op(ordered, rtype, node, op, node.right, "right")
+                    check(ltype, rtype, node, "operand mismatch for `" .. op .. "`, ")
                 end
             end
             if relational(op) then
