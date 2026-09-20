@@ -1,5 +1,5 @@
 * text=auto
 *.lua text eol=lf
-*.lt text eol=lf
+*.lau text eol=lf
 *.md text eol=lf
 *.bat text eol=crlf
