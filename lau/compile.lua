@@ -131,6 +131,18 @@ return function(options, color)
         s.text()
         return typ, luacode, r.as_text(), top_vars
     end
+    local locate; locate = function(name, verbatim)
+        if verbatim then
+            return {name .. ".lau"}
+        end
+        local flat = name .. ".lau"
+        local joined = string.gsub(name, "[.]", term.slash)
+        local nested = joined .. ".lau"
+        if flat == nested then
+            return {flat}
+        end
+        return {flat, nested}
+    end
     import = function(name, verbatim)
         local mod = imports[name]
         if mod then
@@ -140,26 +152,25 @@ return function(options, color)
             return mod.type, mod.code, mod.warns
         end
         imports[name] = Circular
-        local path
-        if verbatim then
-            path = name
-        else
-            path = string.gsub(name, "[.]", term.slash)
-        end
-        path = path .. ".lau"
-        local fh, err = io.open(path, "r")
-        if not fh then
-            local em = "cannot open import '" .. name .. "' at " .. path
-            if err then
-                em = em .. ": " .. err
+        local paths = locate(name, verbatim)
+        local last_err = nil
+        for _, path in ipairs(paths) do
+            local fh, err = io.open(path, "r")
+            if fh then
+                local typ, code, warns = compile(reader.file(fh))
+                fh:close()
+                imports[name] = {path = path, type = typ, code = code, warns = warns}
+                return typ, code, warns, imports
             end
-            imports[name] = {path = path, type = false, code = nil, warns = em}
-            return false, nil, em, imports
+            last_err = err
         end
-        fh:close()
-        local typ, code, warns = compile(reader.file(path))
-        imports[name] = {path = path, type = typ, code = code, warns = warns}
-        return typ, code, warns, imports
+        local tried = table.concat(paths, " or ")
+        local em = "cannot open import '" .. name .. "' at " .. tried
+        if last_err then
+            em = em .. ": " .. last_err
+        end
+        imports[name] = {path = paths[1], type = false, code = nil, warns = em}
+        return false, nil, em, imports
     end
     return {file = function(src)
         local f = string.gsub(src, "%.lau", "")

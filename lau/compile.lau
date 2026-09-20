@@ -136,8 +136,18 @@ return \options, color ->
 		return typ, luacode, r.as_text(), top_vars
 
 
-	-- name follows require('name')
-	-- if verbatim, dots in name is not replaced with slash
+ 	-- require('a.b') will find a.b.lua then a/b.lua
+ 	-- returns list of paths to try, in order
+	let locate = \name, verbatim ->
+		if verbatim
+			return { name .. ".lau" }
+		var flat = name .. ".lau"
+		var joined = string.gsub(name, "[.]", term.slash)
+		var nested = joined .. ".lau"
+		if flat == nested
+			return { flat }
+		return { flat, nested }
+
 	-- returns type, code, warns
 	import = \name, verbatim ->
 
@@ -148,26 +158,23 @@ return \options, color ->
 			return mod.type, mod.code, mod.warns
 
 		imports[name] = Circular
-		-- get path by converting . to /
-		--  FIXME: Find out what happens for Lua if require('path.file.1') if /path/file.1.lua exists, but we thought it is /path/file/1/lua.lua
-		var path
-		if verbatim
-			path = name
-		else
-			path = string.gsub(name, "[.]", term.slash)
-		path = path .. ".lau"
-		var fh, err = io.open(path, 'r')
-		if not fh
-			var em = "cannot open import '" .. name .. "' at " .. path
-			if err
-				em = em .. ": " .. err
-			imports[name] = { path = path, type = false, code = nil, warns = em }
-			return false, nil, em, imports
-		fh.close(@)
-		var typ, code, warns = compile(reader.file(path))
+		var paths = locate(name, verbatim)
+		var last_err = nil
+		for _, path in ipairs(paths)
+			var fh, err = io.open(path, 'r')
+			if fh
+				var typ, code, warns = compile(reader.file(fh))
+				fh.close(@)
+				imports[name] = { path = path, type = typ, code = code, warns = warns }
+				return typ, code, warns, imports
+			last_err = err
 
-		imports[name] = { path = path, type = typ, code = code, warns = warns }
-		return typ, code, warns, imports
+		var tried = table.concat(paths, " or ")
+		var em = "cannot open import '" .. name .. "' at " .. tried
+		if last_err
+			em = em .. ": " .. last_err
+		imports[name] = { path = paths[1], type = false, code = nil, warns = em }
+		return false, nil, em, imports
 
 
 	return {

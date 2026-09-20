@@ -13,17 +13,7 @@ local string_reader = function(src)
         end
     end
 end
-local file_reader = function(filename)
-    local f, err
-    if filename then
-        f, err = io.open(filename, "r")
-        if not f and err then
-            io.write(err)
-            io.write("\n")
-        end
-    else
-        f = io.stdin
-    end
+local file_reader = function(f)
     return function()
         return f and f:read(Slab)
     end

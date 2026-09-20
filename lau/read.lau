@@ -14,15 +14,9 @@ var string_reader = \src ->
 			return chunk
 
 
-var file_reader = \filename ->
-	var f, err
-	if filename
-		f, err = io.open(filename, 'r')
-		if not f and err
-			io.write(err)
-			io.write('\n')
-	else
-		f = io.stdin
+-- Wraps an already-open handle as a chunk source: source() -> string|nil.
+-- The caller owns the handle and must close it once the source is drained.
+var file_reader = \f ->
 	return ->
 		return f and f.read(@, Slab)
 
