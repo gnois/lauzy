@@ -1,17 +1,22 @@
-local OUTPUT_BIN = "bin/lau.zy"
-local MODULE_GROUPS = {
+-- Build script: bundles all Lua modules into one dependency-free
+-- bin/lau.zy bytecode file (LuaJIT string.dump output).
+
+local OUTPUT_BIN = "bin/lau.zy"              -- final self-contained executable
+local MODULE_GROUPS = {                      -- folders whose *.lua become modules
     {dir = "lau", prefix = "lau", extension = ".lua"},
 }
-local EXTRA_MODULES = {
+local EXTRA_MODULES = {                      -- extra top-level modules
     {path = "term.lua", name = "term"},
 }
 
-local ENTRY_LUA = "lau.lua"
+local ENTRY_LUA = "lau.lua"                  -- entry point run by the launcher
 
+-- Quote a path so it survives being passed to the shell.
 local function quote_arg(path)
     return string.format("%q", path)
 end
 
+-- List the files in a directory (works with both cmd and sh).
 local function list_files(dir)
     local slash = package.config:sub(1, 1)
     local command
@@ -30,20 +35,12 @@ local function list_files(dir)
     return files
 end
 
-local function read_file(path, mode)
-    local file, err = io.open(path, mode or "rb")
-    if not file then
-        error(err)
-    end
-    local content = file:read("*a")
-    file:close()
-    return content
-end
-
+-- Chunk name used in errors/tracebacks for a compiled module.
 local function chunk_name(path)
     return "@" .. path:gsub("\\", "/")
 end
 
+-- Compile one module to bytecode and register it in package.preload.
 local function add_module(lines, stats, modname, path)
     local chunk = assert(loadfile(path))
     local bytecode = string.dump(chunk)
@@ -56,6 +53,7 @@ local function add_module(lines, stats, modname, path)
     stats.modules = stats.modules + 1
 end
 
+-- Register every matching file of a module group.
 local function add_module_group(lines, stats, group)
     for _, file in ipairs(list_files(group.dir)) do
         if file:sub(-#group.extension) == group.extension then
@@ -65,76 +63,12 @@ local function add_module_group(lines, stats, group)
     end
 end
 
-
+-- Accumulated Lua source lines that make up the generated launcher:
+-- one package.preload line per module, then the entry point call.
 local bootstrap = {}
-local stats = {modules = 0, sources = 0}
+local stats = {modules = 0}
 
-bootstrap[#bootstrap + 1] = "local embedded_files = {}\n"
-bootstrap[#bootstrap + 1] = [[
-local original_open = io.open
-local function normalize_path(path)
-    path = path:gsub("\\", "/")
-    path = path:gsub("^%./+", "")
-    path = path:gsub("^/+", "")
-    return path
-end
-local function open_embedded(content)
-    local offset = 1
-    return {
-        read = function(_, format)
-            if format == nil or format == "*l" then
-                if offset > #content then
-                    return nil
-                end
-                local start_pos, end_pos = content:find("\r?\n", offset)
-                if start_pos then
-                    local line = content:sub(offset, start_pos - 1)
-                    offset = end_pos + 1
-                    return line
-                end
-                local tail = content:sub(offset)
-                offset = #content + 1
-                return tail
-            end
-            if format == "*a" then
-                local tail = content:sub(offset)
-                offset = #content + 1
-                return tail
-            end
-            if type(format) == "number" then
-                if offset > #content then
-                    return nil
-                end
-                local chunk = content:sub(offset, offset + format - 1)
-                offset = offset + #chunk
-                if #chunk == 0 then
-                    return nil
-                end
-                return chunk
-            end
-            error("unsupported embedded read format: " .. tostring(format))
-        end,
-        close = function()
-            return true
-        end,
-    }
-end
-io.open = function(path, mode)
-    local file = original_open(path, mode)
-    if file or type(path) ~= "string" then
-        return file
-    end
-    if mode and not mode:match("^r") then
-        return file
-    end
-    local embedded = embedded_files[normalize_path(path)]
-    if embedded ~= nil then
-        return open_embedded(embedded)
-    end
-    return file
-end
-]]
-
+-- Preload the extra modules, then every module group.
 for _, module in ipairs(EXTRA_MODULES) do
     add_module(bootstrap, stats, module.name, module.path)
 end
@@ -143,6 +77,7 @@ for _, group in ipairs(MODULE_GROUPS) do
     add_module_group(bootstrap, stats, group)
 end
 
+-- Compile the entry point and append the call that runs it.
 local main_chunk = assert(loadfile(ENTRY_LUA))
 local main_bytecode = string.dump(main_chunk)
 bootstrap[#bootstrap + 1] = string.format(
@@ -151,14 +86,10 @@ bootstrap[#bootstrap + 1] = string.format(
     chunk_name(ENTRY_LUA)
 )
 
+-- Compile the launcher and dump it as the final bytecode file.
 local launcher = assert(loadstring(table.concat(bootstrap), chunk_name(OUTPUT_BIN)))
 local out = assert(io.open(OUTPUT_BIN, "wb"), "could not create " .. OUTPUT_BIN)
 out:write(string.dump(launcher))
 out:close()
 
-print(string.format(
-    "built %s with %d Lua modules",
-    OUTPUT_BIN,
-    stats.modules,
-    stats.sources
-))
+print(string.format("built %s with %d Lua modules", OUTPUT_BIN, stats.modules))
